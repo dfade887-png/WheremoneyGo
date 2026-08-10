@@ -1,0 +1,32 @@
+[!] Flutter (Channel stable, 3.44.9, on Microsoft Windows [Version 10.0.26200.8875], locale en-US)
+    • Flutter version 3.44.9 on channel stable at C:\Users\pondz\Documents\Codex\tools\flutter
+    ! The flutter binary is not on the current shell path.
+    ! The dart binary is not on the current shell path.
+    • Framework revision 6b182d2c75 (2026-08-05)
+    • Engine revision 5a2a6a42cc
+    • Dart version 3.12.2
+    • DevTools version 2.57.0
+
+[√] Windows Version (11 Pro 64-bit, 25H2, 2009)
+
+[√] Android toolchain - develop for Android devices (Android SDK version 36.0.0)
+    • Android SDK at C:\Users\pondz\AppData\Local\Android\Sdk
+    • Platform android-36, build-tools 36.0.0
+    • Java binary at: C:\Users\pondz\Documents\Codex\tools\android-studio\jbr\bin\java
+    • Java version OpenJDK Runtime Environment (build 25.0.2+-15348964-b329.117)
+    • All Android licenses accepted.
+
+[√] Chrome - develop for the web
+    • Chrome at C:\Program Files\Google\Chrome\Application\chrome.exe
+
+[X] Visual Studio - develop Windows apps
+    X Visual Studio not installed; required only for Windows desktop development.
+
+[√] Connected device (2 available)
+    • Windows (desktop)
+    • Chrome (web)
+
+[√] Network resources
+    • All expected network resources are available.
+
+Doctor found warnings in 2 categories: current-shell PATH and Windows desktop tooling. Neither blocks Android builds.

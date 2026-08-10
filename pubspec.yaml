@@ -1,0 +1,24 @@
+name: ngoen_ku_pai_nai
+description: Local-first personal finance health engine.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  crypto: ^3.0.7
+  drift: ^2.34.3
+  path: ^1.9.1
+  sqlite3: ^3.1.0
+  uuid: ^4.5.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

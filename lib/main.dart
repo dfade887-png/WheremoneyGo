@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
 import 'ui/finance_app.dart';
 
-void main() => runApp(const FinanceApp());
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(const FinanceApp());
+}

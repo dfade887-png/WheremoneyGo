@@ -19,6 +19,13 @@ final class SqliteFinanceRepository implements FinanceRepository {
     return repository;
   }
 
+  factory SqliteFinanceRepository.file(String path) {
+    final database = sqlite3.open(path);
+    final repository = SqliteFinanceRepository._(database);
+    repository._migrate();
+    return repository;
+  }
+
   final Database database;
   static const _uuid = Uuid();
   static const _backupTables = <String>[

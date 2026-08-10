@@ -6,16 +6,24 @@ import 'app_state.dart';
 import 'theme/app_theme.dart';
 
 class FinanceApp extends StatefulWidget {
-  const FinanceApp({super.key});
+  const FinanceApp({this.state, super.key});
+  final AppState? state;
   @override
   State<FinanceApp> createState() => _FinanceAppState();
 }
 
 class _FinanceAppState extends State<FinanceApp> {
-  final state = AppState();
+  late final state = widget.state ?? AppState();
+
+  @override
+  void initState() {
+    super.initState();
+    state.initialize();
+  }
+
   @override
   void dispose() {
-    state.dispose();
+    if (widget.state == null) state.dispose();
     super.dispose();
   }
 
@@ -36,6 +44,9 @@ class _AppRouter extends StatelessWidget {
   final AppState state;
   @override
   Widget build(BuildContext context) {
+    if (!state.initialized && state.viewStatus == ViewStatus.loading) {
+      return _SystemState(state: state);
+    }
     if (state.viewStatus != ViewStatus.ready) return _SystemState(state: state);
     return switch (state.step) {
       AppStep.welcome => WelcomeScreen(onNext: () => state.go(AppStep.payday)),
@@ -403,7 +414,7 @@ class SavingScreen extends StatelessWidget {
   Widget build(BuildContext context) => _FormShell(
     title: 'เป้าหมายเงินออม',
     onBack: () => state.go(AppStep.recurring),
-    onNext: () => state.go(AppStep.dashboard),
+    onNext: state.completeOnboarding,
     children: [
       TextFormField(
         initialValue: state.savingTarget.baht.toStringAsFixed(0),
@@ -607,7 +618,7 @@ class DashboardScreen extends StatelessWidget {
                         useSafeArea: true,
                         builder: (_) => const QuickAddSheet(),
                       );
-                      if (amount != null) state.addFoodExpense(amount);
+                      if (amount != null) await state.addFoodExpense(amount);
                     },
                     icon: const Icon(Icons.add),
                     label: const Text('บันทึกรายการเร็ว'),
@@ -782,25 +793,27 @@ class _CategoryPicker extends StatelessWidget {
   Widget build(BuildContext context) => SafeArea(
     child: Padding(
       padding: const EdgeInsets.all(20),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('เลือกหมวด', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 12),
-          for (final item in const [
-            'อาหาร',
-            'เดินทาง',
-            'ใช้ส่วนตัว',
-            'ครอบครัว',
-          ])
-            ListTile(
-              minTileHeight: 52,
-              title: Text(item),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => Navigator.pop(context, item),
-            ),
-        ],
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('เลือกหมวด', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 12),
+            for (final item in const [
+              'อาหาร',
+              'เดินทาง',
+              'ใช้ส่วนตัว',
+              'ครอบครัว',
+            ])
+              ListTile(
+                minTileHeight: 52,
+                title: Text(item),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.pop(context, item),
+              ),
+          ],
+        ),
       ),
     ),
   );
@@ -1041,59 +1054,61 @@ class _ClassificationSheet extends StatelessWidget {
   Widget build(BuildContext context) => SafeArea(
     child: Padding(
       padding: const EdgeInsets.all(20),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'จัดประเภทรายการ',
-            style: Theme.of(context).textTheme.titleLarge,
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '${row.date} • ${row.title} • ฿${row.amount.abs()}',
-            style: const TextStyle(color: AppColors.muted),
-          ),
-          const SizedBox(height: 12),
-          for (final kind in const [
-            StatementClassification.matchExisting,
-            StatementClassification.income,
-            StatementClassification.expense,
-            StatementClassification.refund,
-            StatementClassification.transfer,
-            StatementClassification.ignore,
-          ])
-            ListTile(
-              minTileHeight: 48,
-              title: Text(kind.name),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () async {
-                if (kind == StatementClassification.matchExisting) {
-                  final matched = await showDialog<bool>(
-                    context: context,
-                    builder: (context) => AlertDialog(
-                      title: const Text('จับคู่ Manual Transaction'),
-                      content: Text(
-                        '${row.date} • ฿${row.amount.abs()}\n${row.title} • บัญชีเงินเดือน',
-                      ),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(context, false),
-                          child: const Text('ยกเลิก'),
-                        ),
-                        FilledButton(
-                          onPressed: () => Navigator.pop(context, true),
-                          child: const Text('เลือก'),
-                        ),
-                      ],
-                    ),
-                  );
-                  if (matched != true || !context.mounted) return;
-                }
-                if (context.mounted) Navigator.pop(context, kind);
-              },
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'จัดประเภทรายการ',
+              style: Theme.of(context).textTheme.titleLarge,
             ),
-        ],
+            const SizedBox(height: 8),
+            Text(
+              '${row.date} • ${row.title} • ฿${row.amount.abs()}',
+              style: const TextStyle(color: AppColors.muted),
+            ),
+            const SizedBox(height: 12),
+            for (final kind in const [
+              StatementClassification.matchExisting,
+              StatementClassification.income,
+              StatementClassification.expense,
+              StatementClassification.refund,
+              StatementClassification.transfer,
+              StatementClassification.ignore,
+            ])
+              ListTile(
+                minTileHeight: 48,
+                title: Text(kind.name),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () async {
+                  if (kind == StatementClassification.matchExisting) {
+                    final matched = await showDialog<bool>(
+                      context: context,
+                      builder: (context) => AlertDialog(
+                        title: const Text('จับคู่ Manual Transaction'),
+                        content: Text(
+                          '${row.date} • ฿${row.amount.abs()}\n${row.title} • บัญชีเงินเดือน',
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context, false),
+                            child: const Text('ยกเลิก'),
+                          ),
+                          FilledButton(
+                            onPressed: () => Navigator.pop(context, true),
+                            child: const Text('เลือก'),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (matched != true || !context.mounted) return;
+                  }
+                  if (context.mounted) Navigator.pop(context, kind);
+                },
+              ),
+          ],
+        ),
       ),
     ),
   );

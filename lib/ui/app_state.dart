@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import '../core/money.dart';
 import '../domain/financial_rules.dart';
+import 'local_finance_store.dart';
 
 enum AppStep { welcome, payday, accounts, recurring, saving, dashboard }
 
@@ -17,6 +18,12 @@ final class FinanceSnapshot {
 }
 
 final class AppState extends ChangeNotifier {
+  AppState({LocalFinanceStore? store}) {
+    _store = store;
+  }
+
+  LocalFinanceStore? _store;
+  bool initialized = false;
   AppStep step = AppStep.welcome;
   ViewStatus viewStatus = ViewStatus.ready;
   int payday = 25;
@@ -27,6 +34,35 @@ final class AppState extends ChangeNotifier {
   Money savingTarget = Money.fromBaht(2500);
   Money emergencyTarget = Money.fromBaht(30000);
 
+  Future<void> initialize() async {
+    viewStatus = ViewStatus.loading;
+    notifyListeners();
+    try {
+      _store ??= await LocalFinanceStore.open();
+      final profile = await _store!.loadProfile();
+      if (profile != null) {
+        payday = profile.payday;
+        holidayRule = profile.holidayRule;
+        accountName = profile.accountName;
+        openingBalance = profile.openingBalance;
+        savingTarget = profile.savingTarget;
+        emergencyTarget = profile.emergencyTarget;
+        foodSpent = profile.foodSpent;
+        step = AppStep.dashboard;
+      }
+      initialized = true;
+      viewStatus = ViewStatus.ready;
+    } catch (_) {
+      viewStatus = ViewStatus.error;
+    }
+    notifyListeners();
+  }
+
+  Future<void> completeOnboarding() async {
+    await _store!.saveProfile(LocalProfile(payday: payday, holidayRule: holidayRule, accountName: accountName, openingBalance: openingBalance, savingTarget: savingTarget, emergencyTarget: emergencyTarget, foodSpent: foodSpent));
+    go(AppStep.dashboard);
+  }
+
   FinanceSnapshot get snapshot {
     final currentCash = FinancialRules.currentCash([
       openingBalance,
@@ -34,7 +70,7 @@ final class AppState extends ChangeNotifier {
     ]);
     final flexible = FinancialRules.remainingFlexible(
       Money.fromBaht(5626),
-      foodSpent,
+      Money.zero,
     );
     return FinanceSnapshot(
       currentCash: currentCash,
@@ -59,8 +95,10 @@ final class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void addFoodExpense(Money value) {
+  Future<void> addFoodExpense(Money value) async {
+    await _store!.addExpense(amount: value, categoryName: 'อาหาร');
     foodSpent += value;
+    openingBalance -= value;
     notifyListeners();
   }
 }

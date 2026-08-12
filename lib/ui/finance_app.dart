@@ -1475,7 +1475,8 @@ Future<void> _configureInstallment(BuildContext context, AppState state) async {
               controller: paid,
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(
-                labelText: 'Paid ที่ยืนยันแล้ว (บาท)',
+                labelText: 'ยอดที่จ่ายก่อนเริ่มติดตาม (บาท)',
+                helperText: 'ใช้คำนวณความคืบหน้า ไม่หักเงินจริง',
               ),
             ),
             const SizedBox(height: 10),

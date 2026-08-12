@@ -74,4 +74,66 @@ void main() {
       expect((await store.loadProfile())!.foodSpent, Money.fromBaht(150));
     },
   );
+
+  test(
+    'opening installment progress never changes account or ledger',
+    () async {
+      final store = LocalFinanceStore.memory();
+      await store.saveProfile(
+        LocalProfile(
+          payday: 25,
+          holidayRule: 'before',
+          accountName: 'Salary',
+          openingBalance: Money.fromBaht(10000),
+          savingTarget: Money.zero,
+          emergencyTarget: Money.zero,
+          foodSpent: Money.zero,
+        ),
+      );
+
+      final before = (await store.accounts()).single['balance_satang'];
+      await store.configureInstallment(
+        id: 'phone',
+        name: 'โทรศัพท์',
+        total: Money.fromBaht(27000),
+        paid: Money.fromBaht(16000),
+        regular: Money.fromBaht(1000),
+      );
+
+      final progress = await store.loadInstallmentProgress('phone');
+      expect(progress!.paid, Money.fromBaht(16000));
+      expect(progress.remaining, Money.fromBaht(11000));
+      expect(progress.estimatedRemainingPayments, 11);
+      expect((await store.accounts()).single['balance_satang'], before);
+      expect(await store.repository.ledgerTransactionCount(), 0);
+    },
+  );
+
+  test('operational bootstrap is profile scoped and idempotent', () async {
+    final store = LocalFinanceStore.memory();
+    final profile = LocalProfile(
+      payday: 25,
+      holidayRule: 'before',
+      accountName: 'Salary',
+      openingBalance: Money.fromBaht(1000),
+      savingTarget: Money.zero,
+      emergencyTarget: Money.zero,
+      foodSpent: Money.zero,
+    );
+    await store.saveProfile(profile);
+    await store.saveProfile(profile);
+
+    expect((await store.accounts()).length, 1);
+    final categories = await store.categories();
+    expect(categories.length, 6);
+    expect(
+      categories.where((row) => row['category_type'] == 'income').length,
+      2,
+    );
+
+    final secondId = await store.createProfile('งานจริง');
+    await store.switchProfile(secondId);
+    expect(await store.accounts(), isEmpty);
+    expect(await store.categories(), isEmpty);
+  });
 }

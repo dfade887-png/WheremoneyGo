@@ -261,6 +261,12 @@ final class LocalFinanceStore {
   }
 
   Future<void> saveProfile(LocalProfile profile) async {
+    if (profile.payday < 1 || profile.payday > 31) {
+      throw ArgumentError.value(profile.payday, 'payday');
+    }
+    if (profile.accountName.trim().isEmpty) {
+      throw ArgumentError.value(profile.accountName, 'accountName');
+    }
     final now = DateTime.now().toUtc().toIso8601String();
     final value = jsonEncode({
       'payday': profile.payday,
@@ -270,58 +276,68 @@ final class LocalFinanceStore {
       'savingTargetSatang': profile.savingTarget.satang,
       'emergencyTargetSatang': profile.emergencyTarget.satang,
     });
-    repository.execute(
-      '''INSERT INTO profile_settings(id,profile_id,key,value,created_at,updated_at)
+    repository.execute('BEGIN IMMEDIATE');
+    try {
+      repository.execute(
+        '''INSERT INTO profile_settings(id,profile_id,key,value,created_at,updated_at)
          VALUES(?,?,?,?,?,?) ON CONFLICT(profile_id,key) DO UPDATE SET
          value=excluded.value,updated_at=excluded.updated_at,deleted_at=NULL''',
-      [_uuid.v4(), repository.activeProfileId, _profileKey, value, now, now],
-    );
-    repository.execute(
-      '''INSERT INTO profile_settings(id,profile_id,key,value,created_at,updated_at)
+        [_uuid.v4(), repository.activeProfileId, _profileKey, value, now, now],
+      );
+      repository.execute(
+        '''INSERT INTO profile_settings(id,profile_id,key,value,created_at,updated_at)
          VALUES(?,?,?,?,?,?) ON CONFLICT(profile_id,key) DO UPDATE SET
          value=excluded.value,updated_at=excluded.updated_at,deleted_at=NULL''',
-      [
-        _uuid.v4(),
-        repository.activeProfileId,
-        'data_mode',
-        'production',
-        now,
-        now,
-      ],
-    );
-    repository.execute(
-      '''INSERT INTO accounts(id,name,opening_balance_satang,is_active,include_in_net_worth,created_at,updated_at,profile_id)
+        [
+          _uuid.v4(),
+          repository.activeProfileId,
+          'data_mode',
+          'production',
+          now,
+          now,
+        ],
+      );
+      repository.execute(
+        '''INSERT INTO accounts(id,name,opening_balance_satang,is_active,include_in_net_worth,created_at,updated_at,profile_id)
          VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
          name=excluded.name,opening_balance_satang=excluded.opening_balance_satang,
          is_active=1,updated_at=excluded.updated_at''',
-      [
-        _accountId,
-        profile.accountName,
-        profile.openingBalance.satang,
-        1,
-        1,
-        now,
-        now,
-        repository.activeProfileId,
-      ],
-    );
-    for (final category in const [
-      ('food', 'อาหาร', 1),
-      ('travel', 'เดินทาง', 1),
-      ('personal', 'ใช้ส่วนตัว', 0),
-      ('family', 'ครอบครัว', 1),
-    ]) {
-      repository.execute(
-        'INSERT OR IGNORE INTO categories(id,name,is_essential,created_at,updated_at,profile_id) VALUES(?,?,?,?,?,?)',
         [
-          _scopedId(category.$1),
-          category.$2,
-          category.$3,
+          _accountId,
+          profile.accountName,
+          profile.openingBalance.satang,
+          1,
+          1,
           now,
           now,
           repository.activeProfileId,
         ],
       );
+      for (final category in const [
+        ('food', 'อาหาร', 1, 'expense'),
+        ('travel', 'เดินทาง', 1, 'expense'),
+        ('personal', 'ใช้ส่วนตัว', 0, 'expense'),
+        ('family', 'ครอบครัว', 1, 'expense'),
+        ('salary', 'เงินเดือน', 0, 'income'),
+        ('other-income', 'รายรับอื่น', 0, 'income'),
+      ]) {
+        repository.execute(
+          'INSERT OR IGNORE INTO categories(id,name,is_essential,category_type,created_at,updated_at,profile_id) VALUES(?,?,?,?,?,?,?)',
+          [
+            _scopedId(category.$1),
+            category.$2,
+            category.$3,
+            category.$4,
+            now,
+            now,
+            repository.activeProfileId,
+          ],
+        );
+      }
+      repository.execute('COMMIT');
+    } catch (_) {
+      repository.execute('ROLLBACK');
+      rethrow;
     }
   }
 
@@ -393,6 +409,7 @@ final class LocalFinanceStore {
     final now = DateTime.now().toUtc().toIso8601String();
     final installmentId = _scopedId(id);
     final personalCategoryId = _scopedId('personal');
+    final openingProgressKey = 'installment_opening_paid:$installmentId';
     repository.execute('BEGIN IMMEDIATE');
     try {
       repository.execute(
@@ -413,41 +430,18 @@ final class LocalFinanceStore {
         ],
       );
       repository.execute(
-        "DELETE FROM commitment_occurrences WHERE installment_id=?",
-        [installmentId],
+        '''INSERT INTO profile_settings(id,profile_id,key,value,created_at,updated_at)
+           VALUES(?,?,?,?,?,?) ON CONFLICT(profile_id,key) DO UPDATE SET
+           value=excluded.value,updated_at=excluded.updated_at,deleted_at=NULL''',
+        [
+          _uuid.v4(),
+          repository.activeProfileId,
+          openingProgressKey,
+          paid.satang.toString(),
+          now,
+          now,
+        ],
       );
-      if (paid.satang > 0) {
-        final transactionId = _uuid.v4();
-        repository.execute(
-          "INSERT INTO transactions(id,account_id,category_id,type,amount_satang,occurred_at,source,note,created_at,updated_at,profile_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-          [
-            transactionId,
-            _accountId,
-            personalCategoryId,
-            'expense',
-            paid.satang,
-            now,
-            'manual',
-            'ยอดชำระสะสมที่ผู้ใช้ยืนยัน',
-            now,
-            now,
-            repository.activeProfileId,
-          ],
-        );
-        repository.execute(
-          "INSERT INTO commitment_occurrences(id,installment_id,due_date,planned_amount_satang,linked_transaction_id,created_at,updated_at,profile_id) VALUES(?,?,?,?,?,?,?,?)",
-          [
-            _uuid.v4(),
-            installmentId,
-            now.split('T').first,
-            paid.satang,
-            transactionId,
-            now,
-            now,
-            repository.activeProfileId,
-          ],
-        );
-      }
       repository.execute('COMMIT');
     } catch (_) {
       repository.execute('ROLLBACK');
@@ -463,6 +457,13 @@ final class LocalFinanceStore {
     );
     if (installments.isEmpty) return null;
     final row = installments.single;
+    final openingRows = repository.query(
+      'SELECT value FROM profile_settings WHERE profile_id=? AND key=? AND deleted_at IS NULL',
+      [repository.activeProfileId, 'installment_opening_paid:$installmentId'],
+    );
+    final openingPaid = openingRows.isEmpty
+        ? 0
+        : int.tryParse(openingRows.single['value'] as String) ?? 0;
     final payments = repository.query(
       "SELECT t.amount_satang,t.type FROM commitment_occurrences o JOIN transactions t ON t.id=o.linked_transaction_id WHERE o.installment_id=? AND o.deleted_at IS NULL AND t.deleted_at IS NULL",
       [installmentId],
@@ -474,9 +475,12 @@ final class LocalFinanceStore {
       regularPayment: row['regular_payment_satang'] == null
           ? null
           : Money.fromSatang(row['regular_payment_satang'] as int),
-      confirmedPayments: payments
-          .where((e) => e['type'] == 'expense')
-          .map((e) => Money.fromSatang(e['amount_satang'] as int)),
+      confirmedPayments: [
+        if (openingPaid > 0) Money.fromSatang(openingPaid),
+        ...payments
+            .where((e) => e['type'] == 'expense')
+            .map((e) => Money.fromSatang(e['amount_satang'] as int)),
+      ],
       linkedRefunds: payments
           .where((e) => e['type'] == 'refund')
           .map((e) => Money.fromSatang(e['amount_satang'] as int)),

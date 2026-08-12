@@ -339,9 +339,67 @@ class FinancialProfilesScreen extends StatelessWidget {
                     '${profile['account_count']} บัญชี • ${profile['transaction_count']} รายการ\n${profile['status']}',
                   ),
                   isThreeLine: true,
-                  trailing: profile['id'] == state.activeProfileId
-                      ? const Chip(label: Text('กำลังใช้'))
-                      : const Icon(Icons.chevron_right),
+                  trailing: PopupMenuButton<String>(
+                    tooltip: 'จัดการโปรไฟล์',
+                    onSelected: (action) async {
+                      final id = profile['id'] as String;
+                      if (action == 'rename') {
+                        final controller = TextEditingController(
+                          text: profile['name'] as String,
+                        );
+                        final name = await showDialog<String>(
+                          context: context,
+                          builder: (dialogContext) => AlertDialog(
+                            title: const Text('เปลี่ยนชื่อโปรไฟล์'),
+                            content: TextField(
+                              controller: controller,
+                              autofocus: true,
+                              decoration: const InputDecoration(
+                                labelText: 'ชื่อโปรไฟล์',
+                              ),
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(dialogContext),
+                                child: const Text('ยกเลิก'),
+                              ),
+                              FilledButton(
+                                onPressed: () => Navigator.pop(
+                                  dialogContext,
+                                  controller.text.trim(),
+                                ),
+                                child: const Text('บันทึก'),
+                              ),
+                            ],
+                          ),
+                        );
+                        controller.dispose();
+                        if (name != null && name.isNotEmpty) {
+                          await state.renameFinancialProfile(id, name);
+                        }
+                      } else if (action == 'archive') {
+                        await state.archiveFinancialProfile(id);
+                      } else if (action == 'restore') {
+                        await state.restoreFinancialProfile(id);
+                      }
+                    },
+                    itemBuilder: (_) => [
+                      const PopupMenuItem(
+                        value: 'rename',
+                        child: Text('เปลี่ยนชื่อ'),
+                      ),
+                      if (profile['status'] == 'archived')
+                        const PopupMenuItem(
+                          value: 'restore',
+                          child: Text('นำกลับมาใช้'),
+                        )
+                      else if (profile['id'] != state.activeProfileId)
+                        const PopupMenuItem(
+                          value: 'archive',
+                          child: Text('เก็บเข้าคลัง'),
+                        ),
+                    ],
+                  ),
                   onTap:
                       profile['status'] == 'archived' ||
                           profile['id'] == state.activeProfileId
@@ -441,10 +499,10 @@ class FinancialProfilesScreen extends StatelessWidget {
           );
           name.dispose();
           if (created != null) {
-            await state.createAndSwitchProfile(created);
             if (context.mounted) {
               Navigator.popUntil(context, (route) => route.isFirst);
             }
+            await state.createAndSwitchProfile(created);
           }
         },
       ),

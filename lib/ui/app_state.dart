@@ -42,6 +42,7 @@ final class AppState extends ChangeNotifier {
   List<Map<String, Object?>> profiles = const [];
   String? activeProfileId;
   projection.FinancialSnapshot? projectionSnapshot;
+  bool onboardingSubmitting = false;
 
   Future<void> initialize() async {
     viewStatus = ViewStatus.loading;
@@ -70,19 +71,31 @@ final class AppState extends ChangeNotifier {
   }
 
   Future<void> completeOnboarding() async {
-    await _store!.saveProfile(
-      LocalProfile(
-        payday: payday,
-        holidayRule: holidayRule,
-        accountName: accountName,
-        openingBalance: openingBalance,
-        savingTarget: savingTarget,
-        emergencyTarget: emergencyTarget,
-        foodSpent: foodSpent,
-      ),
-    );
-    await refreshDailyData();
-    go(AppStep.dashboard);
+    if (onboardingSubmitting) return;
+    onboardingSubmitting = true;
+    viewStatus = ViewStatus.loading;
+    notifyListeners();
+    try {
+      await _store!.saveProfile(
+        LocalProfile(
+          payday: payday,
+          holidayRule: holidayRule,
+          accountName: accountName,
+          openingBalance: openingBalance,
+          savingTarget: savingTarget,
+          emergencyTarget: emergencyTarget,
+          foodSpent: foodSpent,
+        ),
+      );
+      await refreshDailyData();
+      step = AppStep.dashboard;
+      viewStatus = ViewStatus.ready;
+    } catch (_) {
+      viewStatus = ViewStatus.error;
+    } finally {
+      onboardingSubmitting = false;
+      notifyListeners();
+    }
   }
 
   FinanceSnapshot get snapshot {
@@ -145,8 +158,33 @@ final class AppState extends ChangeNotifier {
 
   Future<void> switchFinancialProfile(String id) async {
     await _store!.switchProfile(id);
+    final profile = await _store!.loadProfile();
+    if (profile != null) {
+      payday = profile.payday;
+      holidayRule = profile.holidayRule;
+      accountName = profile.accountName;
+      openingBalance = profile.openingBalance;
+      savingTarget = profile.savingTarget;
+      emergencyTarget = profile.emergencyTarget;
+      foodSpent = profile.foodSpent;
+    }
     await refreshDailyData();
-    notifyListeners();
+  }
+
+  Future<void> renameFinancialProfile(String id, String name) async {
+    if (name.trim().isEmpty) return;
+    await _store!.renameProfile(id, name.trim());
+    await refreshDailyData();
+  }
+
+  Future<void> archiveFinancialProfile(String id) async {
+    await _store!.archiveProfile(id);
+    await refreshDailyData();
+  }
+
+  Future<void> restoreFinancialProfile(String id) async {
+    await _store!.restoreProfile(id);
+    await refreshDailyData();
   }
 
   Future<void> addAccount(String name, String type, Money opening) async {

@@ -530,6 +530,13 @@ class CommitmentsScreen extends StatelessWidget {
                   Card(
                     child: ListTile(
                       minTileHeight: 84,
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) =>
+                              _CommitmentDetailScreen(state: state, row: row),
+                        ),
+                      ),
                       title: Text(row['name'] as String),
                       subtitle: Text(_commitmentSummary(row)),
                       trailing: IconButton(
@@ -564,95 +571,145 @@ String _commitmentSummary(Map<String, Object?> row) {
 }
 
 Future<void> _commitmentDialog(BuildContext context, AppState state) async {
+  await Navigator.push<void>(
+    context,
+    MaterialPageRoute(builder: (_) => _CommitmentEditorScreen(state: state)),
+  );
+}
+
+class _CommitmentEditorScreen extends StatefulWidget {
+  const _CommitmentEditorScreen({required this.state});
+  final AppState state;
+  @override
+  State<_CommitmentEditorScreen> createState() =>
+      _CommitmentEditorScreenState();
+}
+
+class _CommitmentEditorScreenState extends State<_CommitmentEditorScreen> {
   final name = TextEditingController();
   final total = TextEditingController();
   final regular = TextEditingController();
-  var type = 'fixed_total';
-  await showDialog<void>(
-    context: context,
-    builder: (context) => StatefulBuilder(
-      builder: (context, setDialog) => AlertDialog(
-        title: const Text('เพิ่มภาระ'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              DropdownButtonFormField<String>(
-                initialValue: type,
-                items: const [
-                  DropdownMenuItem(
-                    value: 'fixed_total',
-                    child: Text('ผ่อนแบบมียอดรวม'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'open_ended',
-                    child: Text('ค่าใช้จ่ายต่อเนื่อง'),
-                  ),
-                ],
-                onChanged: (v) => setDialog(() => type = v!),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: name,
-                decoration: const InputDecoration(labelText: 'ชื่อ *'),
-              ),
-              if (type == 'fixed_total') ...[
-                const SizedBox(height: 10),
-                TextField(
-                  controller: total,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'ยอดทั้งหมด *',
-                    suffixText: 'บาท',
-                  ),
-                ),
+  String type = 'fixed_total';
+  bool submitting = false;
+  @override
+  void dispose() {
+    name.dispose();
+    total.dispose();
+    regular.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final totalValue = double.tryParse(total.text);
+    final valid =
+        name.text.trim().isNotEmpty &&
+        (type != 'fixed_total' || (totalValue != null && totalValue > 0));
+    return Scaffold(
+      appBar: AppBar(title: const Text('เพิ่มภาระ')),
+      body: SafeArea(
+        child: ListView(
+          padding: EdgeInsets.fromLTRB(
+            20,
+            20,
+            20,
+            MediaQuery.viewInsetsOf(context).bottom + 20,
+          ),
+          children: [
+            SegmentedButton<String>(
+              segments: const [
+                ButtonSegment(value: 'fixed_total', label: Text('มียอดรวม')),
+                ButtonSegment(value: 'open_ended', label: Text('ต่อเนื่อง')),
               ],
-              const SizedBox(height: 10),
+              selected: {type},
+              onSelectionChanged: (value) => setState(() => type = value.first),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: name,
+              autofocus: true,
+              decoration: const InputDecoration(labelText: 'ชื่อ *'),
+              onChanged: (_) => setState(() {}),
+            ),
+            if (type == 'fixed_total') ...[
+              const SizedBox(height: 16),
               TextField(
-                controller: regular,
-                keyboardType: TextInputType.number,
+                controller: total,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
                 decoration: const InputDecoration(
-                  labelText: 'จ่ายต่อเดือน (ไม่บังคับ)',
+                  labelText: 'ยอดทั้งหมด *',
                   suffixText: 'บาท',
                 ),
+                onChanged: (_) => setState(() {}),
               ),
             ],
-          ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: regular,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              decoration: const InputDecoration(
+                labelText: 'จ่ายต่อเดือน',
+                suffixText: 'บาท',
+              ),
+            ),
+            const SizedBox(height: 24),
+            FilledButton(
+              onPressed: !valid || submitting
+                  ? null
+                  : () async {
+                      FocusManager.instance.primaryFocus?.unfocus();
+                      setState(() => submitting = true);
+                      await widget.state.addCommitment(
+                        name: name.text.trim(),
+                        type: type,
+                        totalSatang: totalValue == null
+                            ? null
+                            : Money.fromBaht(totalValue).satang,
+                        regularSatang: double.tryParse(regular.text) == null
+                            ? null
+                            : Money.fromBaht(double.parse(regular.text)).satang,
+                      );
+                      if (!mounted) return;
+                      Navigator.of(this.context).pop();
+                    },
+              child: Text(submitting ? 'กำลังบันทึก…' : 'เพิ่มรายการ'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('ยกเลิก'),
-          ),
-          FilledButton(
-            onPressed: () async {
-              final totalValue = double.tryParse(total.text);
-              if (name.text.trim().isEmpty ||
-                  (type == 'fixed_total' &&
-                      (totalValue == null || totalValue <= 0))) {
-                return;
-              }
-              await state.addCommitment(
-                name: name.text.trim(),
-                type: type,
-                totalSatang: totalValue == null
-                    ? null
-                    : Money.fromBaht(totalValue).satang,
-                regularSatang: double.tryParse(regular.text) == null
-                    ? null
-                    : Money.fromBaht(double.parse(regular.text)).satang,
-              );
-              if (context.mounted) Navigator.pop(context);
-            },
-            child: const Text('เพิ่ม'),
-          ),
-        ],
       ),
+    );
+  }
+}
+
+class _CommitmentDetailScreen extends StatelessWidget {
+  const _CommitmentDetailScreen({required this.state, required this.row});
+  final AppState state;
+  final Map<String, Object?> row;
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: Text(row['name'] as String)),
+    body: ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        Text(
+          _commitmentSummary(row),
+          style: Theme.of(context).textTheme.titleLarge,
+        ),
+        const SizedBox(height: 20),
+        FilledButton.icon(
+          onPressed: () => _payCommitment(context, state, row),
+          icon: const Icon(Icons.add_card),
+          label: const Text('บันทึกจ่ายงวดนี้'),
+        ),
+        const SizedBox(height: 12),
+        const Text('ประวัติการจ่ายคำนวณจาก Transaction ที่เชื่อมกับรายการนี้'),
+      ],
     ),
   );
-  name.dispose();
-  total.dispose();
-  regular.dispose();
 }
 
 Future<void> _payCommitment(

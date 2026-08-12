@@ -816,6 +816,82 @@ class DailyQuickAdd extends StatefulWidget {
   State<DailyQuickAdd> createState() => _DailyQuickAddState();
 }
 
+String? _selectedName(List<Map<String, Object?>> rows, String? id) {
+  for (final row in rows) {
+    if (row['id'] == id) return row['name'] as String;
+  }
+  return null;
+}
+
+class _MobileSelectorField extends StatelessWidget {
+  const _MobileSelectorField({
+    required this.label,
+    required this.value,
+    required this.onTap,
+    this.helper,
+  });
+  final String label;
+  final String? value, helper;
+  final VoidCallback onTap;
+  @override
+  Widget build(BuildContext context) => Semantics(
+    button: true,
+    label: label,
+    child: InkWell(
+      borderRadius: BorderRadius.circular(16),
+      onTap: onTap,
+      child: InputDecorator(
+        decoration: InputDecoration(labelText: label, helperText: helper),
+        child: Row(
+          children: [
+            Expanded(child: Text(value ?? 'แตะเพื่อเลือก')),
+            const Icon(Icons.chevron_right),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+Future<String?> _selectItemPage(
+  BuildContext context, {
+  required String title,
+  required List<Map<String, Object?>> rows,
+  required String? selectedId,
+}) => Navigator.push<String>(
+  context,
+  MaterialPageRoute(
+    fullscreenDialog: true,
+    builder: (context) => Scaffold(
+      appBar: AppBar(title: Text(title)),
+      body: SafeArea(
+        child: rows.isEmpty
+            ? const _Empty(
+                icon: Icons.inbox_outlined,
+                text: 'ยังไม่มีตัวเลือก กลับไปเพิ่มข้อมูลก่อน',
+              )
+            : ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  for (final row in rows)
+                    ListTile(
+                      minTileHeight: 64,
+                      selected: row['id'] == selectedId,
+                      leading: Icon(
+                        row['id'] == selectedId
+                            ? Icons.radio_button_checked
+                            : Icons.radio_button_off,
+                      ),
+                      title: Text(row['name'] as String),
+                      onTap: () => Navigator.pop(context, row['id'] as String),
+                    ),
+                ],
+              ),
+      ),
+    ),
+  ),
+);
+
 class _DailyQuickAddState extends State<DailyQuickAdd> {
   final amount = TextEditingController();
   final note = TextEditingController();
@@ -915,55 +991,60 @@ class _DailyQuickAddState extends State<DailyQuickAdd> {
                 ),
               ),
               const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                initialValue: accountId,
-                decoration: InputDecoration(
-                  labelText: type == 'income'
-                      ? 'บัญชีปลายทาง *'
-                      : 'บัญชีต้นทาง *',
-                ),
-                items: [
-                  for (final a in activeAccounts)
-                    DropdownMenuItem(
-                      value: a['id'] as String,
-                      child: Text(a['name'] as String),
-                    ),
-                ],
-                onChanged: (v) => setState(() => accountId = v),
+              _MobileSelectorField(
+                label: type == 'income' ? 'บัญชีปลายทาง *' : 'บัญชีต้นทาง *',
+                value: _selectedName(activeAccounts, accountId),
+                onTap: () async {
+                  final selected = await _selectItemPage(
+                    context,
+                    title: type == 'income'
+                        ? 'เลือกบัญชีปลายทาง'
+                        : 'เลือกบัญชีต้นทาง',
+                    rows: activeAccounts,
+                    selectedId: accountId,
+                  );
+                  if (selected != null && mounted) {
+                    setState(() => accountId = selected);
+                  }
+                },
               ),
               const SizedBox(height: 12),
               if (type == 'transfer')
-                DropdownButtonFormField<String>(
-                  initialValue: toAccountId,
-                  decoration: const InputDecoration(
-                    labelText: 'บัญชีปลายทาง *',
-                  ),
-                  items: [
-                    for (final a in activeAccounts.where(
-                      (a) => a['id'] != accountId,
-                    ))
-                      DropdownMenuItem(
-                        value: a['id'] as String,
-                        child: Text(a['name'] as String),
-                      ),
-                  ],
-                  onChanged: (v) => setState(() => toAccountId = v),
+                _MobileSelectorField(
+                  label: 'บัญชีปลายทาง *',
+                  value: _selectedName(activeAccounts, toAccountId),
+                  onTap: () async {
+                    final selected = await _selectItemPage(
+                      context,
+                      title: 'เลือกบัญชีปลายทาง',
+                      rows: activeAccounts
+                          .where((a) => a['id'] != accountId)
+                          .toList(),
+                      selectedId: toAccountId,
+                    );
+                    if (selected != null && mounted) {
+                      setState(() => toAccountId = selected);
+                    }
+                  },
                 )
               else
-                DropdownButtonFormField<String>(
-                  initialValue: categoryId,
-                  decoration: const InputDecoration(
-                    labelText: 'หมวดหมู่ *',
-                    helperText: 'กรุณาเลือกหมวดก่อนบันทึก',
-                  ),
-                  items: [
-                    for (final c in validCategories)
-                      DropdownMenuItem(
-                        value: c['id'] as String,
-                        child: Text(c['name'] as String),
-                      ),
-                  ],
-                  onChanged: (v) => setState(() => categoryId = v),
+                _MobileSelectorField(
+                  label: 'หมวดหมู่ *',
+                  value: _selectedName(validCategories, categoryId),
+                  helper: categoryId == null
+                      ? 'กรุณาเลือกหมวดก่อนบันทึก'
+                      : null,
+                  onTap: () async {
+                    final selected = await _selectItemPage(
+                      context,
+                      title: 'เลือกหมวดหมู่',
+                      rows: validCategories,
+                      selectedId: categoryId,
+                    );
+                    if (selected != null && mounted) {
+                      setState(() => categoryId = selected);
+                    }
+                  },
                 ),
               const SizedBox(height: 12),
               TextField(

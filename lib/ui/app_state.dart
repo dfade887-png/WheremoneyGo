@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import '../core/money.dart';
 import '../domain/financial_rules.dart';
+import '../domain/models/financial_models.dart';
 import 'local_finance_store.dart';
 
 enum AppStep { welcome, payday, accounts, recurring, saving, dashboard }
@@ -33,6 +34,7 @@ final class AppState extends ChangeNotifier {
   Money foodSpent = Money.fromBaht(2040);
   Money savingTarget = Money.fromBaht(2500);
   Money emergencyTarget = Money.fromBaht(30000);
+  InstallmentProgress? phoneProgress;
 
   Future<void> initialize() async {
     viewStatus = ViewStatus.loading;
@@ -49,6 +51,7 @@ final class AppState extends ChangeNotifier {
         emergencyTarget = profile.emergencyTarget;
         foodSpent = profile.foodSpent;
         step = AppStep.dashboard;
+        phoneProgress = await _store!.loadInstallmentProgress('phone');
       }
       initialized = true;
       viewStatus = ViewStatus.ready;
@@ -59,7 +62,17 @@ final class AppState extends ChangeNotifier {
   }
 
   Future<void> completeOnboarding() async {
-    await _store!.saveProfile(LocalProfile(payday: payday, holidayRule: holidayRule, accountName: accountName, openingBalance: openingBalance, savingTarget: savingTarget, emergencyTarget: emergencyTarget, foodSpent: foodSpent));
+    await _store!.saveProfile(
+      LocalProfile(
+        payday: payday,
+        holidayRule: holidayRule,
+        accountName: accountName,
+        openingBalance: openingBalance,
+        savingTarget: savingTarget,
+        emergencyTarget: emergencyTarget,
+        foodSpent: foodSpent,
+      ),
+    );
     go(AppStep.dashboard);
   }
 
@@ -99,6 +112,22 @@ final class AppState extends ChangeNotifier {
     await _store!.addExpense(amount: value, categoryName: 'อาหาร');
     foodSpent += value;
     openingBalance -= value;
+    notifyListeners();
+  }
+
+  Future<void> configurePhoneInstallment({
+    required Money total,
+    required Money paid,
+    required Money regular,
+  }) async {
+    await _store!.configureInstallment(
+      id: 'phone',
+      name: 'โทรศัพท์',
+      total: total,
+      paid: paid,
+      regular: regular,
+    );
+    phoneProgress = await _store!.loadInstallmentProgress('phone');
     notifyListeners();
   }
 }

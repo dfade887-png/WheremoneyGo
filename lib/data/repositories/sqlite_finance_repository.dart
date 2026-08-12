@@ -5,6 +5,7 @@ import 'package:sqlite3/sqlite3.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../domain/models/financial_models.dart';
+import '../../domain/bank_notification/bank_notification_adapter.dart';
 import '../../domain/repositories/finance_repository.dart';
 import '../local/migration_runner.dart';
 import '../local/schema_v2.dart';
@@ -72,6 +73,83 @@ final class SqliteFinanceRepository implements FinanceRepository {
               )
               .first['count']
           as int;
+
+  Future<String> stageBankEvent(
+    ParsedBankEvent event, {
+    required String sourcePackage,
+    required DateTime detectedAt,
+  }) async {
+    final existing = database.select(
+      'SELECT id FROM bank_notification_events WHERE notification_key_hash=? OR content_fingerprint=? LIMIT 1',
+      [event.notificationKeyHash, event.contentFingerprint],
+    );
+    if (existing.isNotEmpty) return existing.first['id'] as String;
+    final id = _uuid.v4();
+    final now = DateTime.now().toUtc().toIso8601String();
+    database.execute(
+      'INSERT INTO bank_notification_events(id,source_package,institution,adapter_version,notification_key_hash,content_fingerprint,detected_at,posted_at,direction,amount_satang,account_hint_masked,merchant_hint,status,parse_error_code,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      [
+        id,
+        sourcePackage,
+        event.institution,
+        event.adapterVersion,
+        event.notificationKeyHash,
+        event.contentFingerprint,
+        detectedAt.toUtc().toIso8601String(),
+        detectedAt.toUtc().toIso8601String(),
+        event.direction.name,
+        event.amount?.satang,
+        event.accountHintMasked,
+        event.merchantHint,
+        event.parsed ? 'pending' : 'parse_failed',
+        event.errorCode,
+        now,
+        now,
+      ],
+    );
+    return id;
+  }
+
+  Future<void> ignoreBankEvent(String id) async => database.execute(
+    "UPDATE bank_notification_events SET status='ignored',updated_at=? WHERE id=? AND status IN ('pending','parse_failed')",
+    [DateTime.now().toUtc().toIso8601String(), id],
+  );
+
+  Future<String> confirmBankEventExpense(
+    String id, {
+    required String accountId,
+    required String categoryId,
+    bool failAfterTransaction = false,
+  }) async {
+    late String transactionId;
+    _atomic(() {
+      final rows = database.select(
+        "SELECT amount_satang,status FROM bank_notification_events WHERE id=? AND status='pending'",
+        [id],
+      );
+      if (rows.isEmpty || rows.first['amount_satang'] == null) {
+        throw StateError('Bank event cannot be confirmed');
+      }
+      transactionId = _insertTransaction(
+        accountId: accountId,
+        type: 'expense',
+        amount: rows.first['amount_satang'] as int,
+        source: 'bank_notification',
+      );
+      database.execute('UPDATE transactions SET category_id=? WHERE id=?', [
+        categoryId,
+        transactionId,
+      ]);
+      if (failAfterTransaction) {
+        throw StateError('Injected bank confirmation failure');
+      }
+      database.execute(
+        "UPDATE bank_notification_events SET status='confirmed',matched_transaction_id=?,updated_at=? WHERE id=?",
+        [transactionId, DateTime.now().toUtc().toIso8601String(), id],
+      );
+    });
+    return transactionId;
+  }
 
   @override
   Future<String> createTransfer({

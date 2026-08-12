@@ -477,7 +477,12 @@ class DashboardScreen extends StatelessWidget {
                     children: [
                       const _DemoPill(),
                       IconButton(
-                        onPressed: () {},
+                        onPressed: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const BankNotificationSetupScreen(),
+                          ),
+                        ),
                         tooltip: 'ตั้งค่า',
                         icon: const Icon(
                           Icons.settings_outlined,
@@ -608,6 +613,11 @@ class DashboardScreen extends StatelessWidget {
                         ),
                       ],
                     ),
+                  ),
+                  const SizedBox(height: 12),
+                  _InstallmentCard(
+                    progress: state.phoneProgress,
+                    onSetup: () => _configureInstallment(context, state),
                   ),
                   const SizedBox(height: 12),
                   FilledButton.icon(
@@ -1345,4 +1355,213 @@ String _money(Money value) {
     (_) => ',',
   );
   return '$sign฿$grouped';
+}
+
+class _InstallmentCard extends StatelessWidget {
+  const _InstallmentCard({required this.progress, required this.onSetup});
+  final InstallmentProgress? progress;
+  final VoidCallback onSetup;
+  @override
+  Widget build(BuildContext context) {
+    final value = progress;
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        onTap: value == null
+            ? onSetup
+            : () => _breakdown(context, 'Installment Progress', [
+                'Paid ${_money(value.paid)}',
+                'Remaining ${_money(value.remaining)}',
+                if (value.overpayment.satang > 0)
+                  'Overpayment ${_money(value.overpayment)} — please review',
+                'Estimated remaining payments ${value.estimatedRemainingPayments ?? 'unknown'}',
+              ]),
+        borderRadius: BorderRadius.circular(18),
+        child: Padding(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'ผ่อนโทรศัพท์',
+                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                value == null
+                    ? 'ยังไม่ได้ตั้ง Total Payable'
+                    : '${((value.progressRatio ?? 0) * 100).toStringAsFixed(0)}% complete',
+              ),
+              if (value != null) ...[
+                const SizedBox(height: 8),
+                LinearProgressIndicator(
+                  value: (value.progressRatio ?? 0).clamp(0, 1),
+                  minHeight: 8,
+                  borderRadius: BorderRadius.circular(99),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '${_money(value.remaining)} remaining • approximately ${value.estimatedRemainingPayments ?? '-'} payments',
+                ),
+              ] else
+                const Text('แตะเพื่อตั้งยอดสัญญาจริง โดยแอปจะไม่เดายอดให้'),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+Future<void> _configureInstallment(BuildContext context, AppState state) async {
+  final total = TextEditingController();
+  final paid = TextEditingController();
+  final regular = TextEditingController(text: '1000');
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('ตั้ง Installment Progress'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: total,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Total Payable (บาท)',
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: paid,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Paid ที่ยืนยันแล้ว (บาท)',
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: regular,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Regular Payment (บาท)',
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext, false),
+          child: const Text('ยกเลิก'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(dialogContext, true),
+          child: const Text('บันทึก'),
+        ),
+      ],
+    ),
+  );
+  if (confirmed == true && context.mounted) {
+    final totalValue = int.tryParse(total.text);
+    final paidValue = int.tryParse(paid.text) ?? 0;
+    final regularValue = int.tryParse(regular.text);
+    if (totalValue != null &&
+        totalValue > 0 &&
+        regularValue != null &&
+        regularValue > 0) {
+      await state.configurePhoneInstallment(
+        total: Money.fromBaht(totalValue),
+        paid: Money.fromBaht(paidValue),
+        regular: Money.fromBaht(regularValue),
+      );
+    }
+  }
+  total.dispose();
+  paid.dispose();
+  regular.dispose();
+}
+
+class BankNotificationSetupScreen extends StatefulWidget {
+  const BankNotificationSetupScreen({super.key});
+  @override
+  State<BankNotificationSetupScreen> createState() =>
+      _BankNotificationSetupScreenState();
+}
+
+class _BankNotificationSetupScreenState
+    extends State<BankNotificationSetupScreen> {
+  static const channel = MethodChannel('ngoen_ku_pai_nai/bank_notifications');
+  bool enabled = false;
+  bool access = false;
+  Future<void> refresh() async {
+    final granted =
+        await channel.invokeMethod<bool>('hasNotificationAccess') ?? false;
+    if (mounted) setState(() => access = granted);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    refresh();
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Bank Notification Capture')),
+    body: ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        const Text(
+          'EXPERIMENTAL • Android only',
+          style: TextStyle(
+            color: AppColors.orange,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 12),
+        const Text(
+          'แอปจะตรวจเฉพาะธนาคารที่รองรับ แปลงข้อมูลในเครื่อง และสร้าง Pending event ก่อนเสมอ ไม่มีการลงรายจ่ายอัตโนมัติ',
+        ),
+        const SizedBox(height: 12),
+        SwitchListTile(
+          title: const Text('เปิดฟีเจอร์ทดลอง'),
+          subtitle: const Text('ปิดโดยค่าเริ่มต้น • ยกเลิกได้ทุกเมื่อ'),
+          value: enabled,
+          onChanged: (value) => setState(() => enabled = value),
+        ),
+        ListTile(
+          title: const Text('Notification Access'),
+          subtitle: Text(
+            access
+                ? 'Granted • Listening (no real bank adapter configured)'
+                : 'Permission missing',
+          ),
+          leading: Icon(
+            access ? Icons.check_circle : Icons.warning_amber,
+            color: access ? Colors.green : AppColors.orange,
+          ),
+        ),
+        FilledButton(
+          onPressed: enabled
+              ? () async {
+                  await channel.invokeMethod<void>('openNotificationAccess');
+                }
+              : null,
+          child: const Text('เปิด Android Notification Access'),
+        ),
+        const SizedBox(height: 12),
+        OutlinedButton(
+          onPressed: refresh,
+          child: const Text('ตรวจสิทธิ์อีกครั้ง'),
+        ),
+        const SizedBox(height: 20),
+        const _Info(
+          'ยังไม่รองรับธนาคารจริงจนกว่าจะมี package name และตัวอย่าง Notification ที่ปิดข้อมูลส่วนตัวแล้ว Raw notification จะไม่ถูกเก็บหรือส่งออกนอกเครื่อง',
+        ),
+      ],
+    ),
+  );
 }

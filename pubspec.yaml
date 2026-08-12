@@ -1,7 +1,7 @@
 name: ngoen_ku_pai_nai
 description: Local-first personal finance health engine.
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.1.0+2
 
 environment:
   sdk: ^3.12.2

@@ -6,6 +6,8 @@ import 'package:uuid/uuid.dart';
 
 import '../core/money.dart';
 import '../data/repositories/sqlite_finance_repository.dart';
+import '../domain/financial_rules.dart';
+import '../domain/models/financial_models.dart';
 
 final class LocalProfile {
   const LocalProfile({
@@ -175,6 +177,100 @@ final class LocalFinanceStore {
     repository.execute(
       "UPDATE transactions SET deleted_at=NULL,updated_at=? WHERE id=? AND source='manual' AND deleted_at IS NOT NULL",
       [DateTime.now().toUtc().toIso8601String(), id],
+    );
+  }
+
+  Future<void> configureInstallment({
+    required String id,
+    required String name,
+    required Money total,
+    required Money paid,
+    required Money regular,
+  }) async {
+    final now = DateTime.now().toUtc().toIso8601String();
+    repository.execute('BEGIN IMMEDIATE');
+    try {
+      repository.execute(
+        "INSERT OR REPLACE INTO installments(id,category_id,name,amount_satang,due_day,start_date,total_payable_satang,regular_payment_satang,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        [
+          id,
+          'personal',
+          name,
+          regular.satang,
+          1,
+          now.split('T').first,
+          total.satang,
+          regular.satang,
+          'active',
+          now,
+          now,
+        ],
+      );
+      repository.execute(
+        "DELETE FROM commitment_occurrences WHERE installment_id=?",
+        [id],
+      );
+      if (paid.satang > 0) {
+        final transactionId = _uuid.v4();
+        repository.execute(
+          "INSERT INTO transactions(id,account_id,category_id,type,amount_satang,occurred_at,source,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+          [
+            transactionId,
+            _accountId,
+            'personal',
+            'expense',
+            paid.satang,
+            now,
+            'manual',
+            'ยอดชำระสะสมที่ผู้ใช้ยืนยัน',
+            now,
+            now,
+          ],
+        );
+        repository.execute(
+          "INSERT INTO commitment_occurrences(id,installment_id,due_date,planned_amount_satang,linked_transaction_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+          [
+            _uuid.v4(),
+            id,
+            now.split('T').first,
+            paid.satang,
+            transactionId,
+            now,
+            now,
+          ],
+        );
+      }
+      repository.execute('COMMIT');
+    } catch (_) {
+      repository.execute('ROLLBACK');
+      rethrow;
+    }
+  }
+
+  Future<InstallmentProgress?> loadInstallmentProgress(String id) async {
+    final installments = repository.query(
+      'SELECT total_payable_satang,regular_payment_satang FROM installments WHERE id=? AND deleted_at IS NULL',
+      [id],
+    );
+    if (installments.isEmpty) return null;
+    final row = installments.single;
+    final payments = repository.query(
+      "SELECT t.amount_satang,t.type FROM commitment_occurrences o JOIN transactions t ON t.id=o.linked_transaction_id WHERE o.installment_id=? AND o.deleted_at IS NULL AND t.deleted_at IS NULL",
+      [id],
+    );
+    return FinancialRules.installmentProgress(
+      totalPayable: row['total_payable_satang'] == null
+          ? null
+          : Money.fromSatang(row['total_payable_satang'] as int),
+      regularPayment: row['regular_payment_satang'] == null
+          ? null
+          : Money.fromSatang(row['regular_payment_satang'] as int),
+      confirmedPayments: payments
+          .where((e) => e['type'] == 'expense')
+          .map((e) => Money.fromSatang(e['amount_satang'] as int)),
+      linkedRefunds: payments
+          .where((e) => e['type'] == 'refund')
+          .map((e) => Money.fromSatang(e['amount_satang'] as int)),
     );
   }
 }

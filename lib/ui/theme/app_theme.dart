@@ -1,16 +1,21 @@
 import 'package:flutter/material.dart';
 
 abstract final class AppColors {
-  static const ink = Color(0xFF07131D);
-  static const paper = Color(0xFFF4F6F4);
-  static const mint = Color(0xFFBAFF63);
-  static const mintSoft = Color(0xFFDFFFC0);
-  static const line = Color(0xFFD8DDD8);
-  static const muted = Color(0xFF66726D);
-  static const orange = Color(0xFFFF9F43);
-  static const red = Color(0xFFED574F);
-  static const blue = Color(0xFF4B8BDB);
-  static const violet = Color(0xFF7C6CD1);
+  // Rose Angel preset — sampled from the user's Remielle references.
+  // The copyrighted artwork itself is intentionally not bundled in the APK.
+  static const ink = Color(0xFF211723);
+  static const paper = Color(0xFFFFF7FA);
+  static const mint = Color(0xFFFF8FBE);
+  static const mintSoft = Color(0xFFFFD9E8);
+  static const line = Color(0xFFE8D6E1);
+  static const muted = Color(0xFF776772);
+  static const orange = Color(0xFFD59A43);
+  static const red = Color(0xFFD94E72);
+  static const blue = Color(0xFF8496D8);
+  static const violet = Color(0xFFA94BCB);
+  static const silver = Color(0xFFDCE2F1);
+  static const magenta = Color(0xFFE54BDB);
+  static const gold = Color(0xFFC89B45);
 }
 
 abstract final class AppTheme {
@@ -51,7 +56,7 @@ abstract final class AppTheme {
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(14),
-        borderSide: const BorderSide(color: AppColors.ink, width: 2),
+        borderSide: const BorderSide(color: AppColors.magenta, width: 2),
       ),
     ),
     filledButtonTheme: FilledButtonThemeData(

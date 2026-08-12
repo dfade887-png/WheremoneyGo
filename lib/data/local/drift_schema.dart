@@ -15,7 +15,8 @@ class Accounts extends SyncableTable {
   TextColumn get name => text()();
   IntColumn get openingBalanceSatang => integer()();
   BoolColumn get isActive => boolean().withDefault(const Constant(true))();
-  BoolColumn get includeInNetWorth => boolean().withDefault(const Constant(true))();
+  BoolColumn get includeInNetWorth =>
+      boolean().withDefault(const Constant(true))();
 }
 
 class Categories extends SyncableTable {
@@ -81,7 +82,8 @@ class SavingGoals extends SyncableTable {
   IntColumn get targetSatang => integer()();
   IntColumn get monthlyTargetSatang => integer()();
   TextColumn get backingAccountId => text().nullable()();
-  BoolColumn get isEmergencyFund => boolean().withDefault(const Constant(false))();
+  BoolColumn get isEmergencyFund =>
+      boolean().withDefault(const Constant(false))();
 }
 
 class SalaryProfiles extends SyncableTable {
@@ -128,7 +130,8 @@ class StatementRows extends Table {
   IntColumn get amountSatang => integer()();
   IntColumn get runningBalanceSatang => integer().nullable()();
   TextColumn get rowFingerprint => text()();
-  TextColumn get classification => text().withDefault(const Constant('pending'))();
+  TextColumn get classification =>
+      text().withDefault(const Constant('pending'))();
   TextColumn get matchedTransactionId => text().nullable().unique()();
   @override
   Set<Column<Object>> get primaryKey => {id};

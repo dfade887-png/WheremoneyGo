@@ -13,8 +13,12 @@ final class StatementAdapterRegistry {
   StatementAdapterRegistry(this.adapters);
   final List<StatementAdapter> adapters;
 
-  StatementAdapter resolve({required String fileName, required Uint8List header}) => adapters.firstWhere(
-        (adapter) => adapter.supports(fileName: fileName, header: header),
-        orElse: () => throw UnsupportedError('No statement adapter supports $fileName'),
-      );
+  StatementAdapter resolve({
+    required String fileName,
+    required Uint8List header,
+  }) => adapters.firstWhere(
+    (adapter) => adapter.supports(fileName: fileName, header: header),
+    orElse: () =>
+        throw UnsupportedError('No statement adapter supports $fileName'),
+  );
 }

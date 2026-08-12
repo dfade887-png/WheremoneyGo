@@ -5,6 +5,7 @@ import '../domain/models/financial_models.dart';
 import 'app_state.dart';
 import 'theme/app_theme.dart';
 import 'daily_driver_screen.dart';
+import 'local_finance_store.dart';
 
 class FinanceApp extends StatefulWidget {
   const FinanceApp({this.state, super.key});
@@ -277,19 +278,17 @@ class _PaydayScreenState extends State<PaydayScreen> {
           onChanged: (_) => setState(() => dirty = true),
         ),
         const SizedBox(height: 16),
-        DropdownButtonFormField<String>(
-          initialValue: widget.state.holidayRule,
-          decoration: const InputDecoration(labelText: 'ถ้าชนวันหยุด'),
-          items: const [
-            DropdownMenuItem(
-              value: 'before',
-              child: Text('ออกวันทำการก่อนหน้า'),
-            ),
-            DropdownMenuItem(value: 'after', child: Text('ออกวันทำการถัดไป')),
-            DropdownMenuItem(value: 'same', child: Text('ยึดวันเดิม')),
+        const Text('ถ้าชนวันหยุด', style: TextStyle(color: AppColors.muted)),
+        const SizedBox(height: 8),
+        SegmentedButton<String>(
+          segments: const [
+            ButtonSegment(value: 'before', label: Text('ก่อนหน้า')),
+            ButtonSegment(value: 'after', label: Text('วันถัดไป')),
+            ButtonSegment(value: 'same', label: Text('วันเดิม')),
           ],
-          onChanged: (v) => setState(() {
-            widget.state.holidayRule = v!;
+          selected: {widget.state.holidayRule},
+          onSelectionChanged: (values) => setState(() {
+            widget.state.holidayRule = values.first;
             dirty = true;
           }),
         ),
@@ -308,16 +307,22 @@ class AccountScreen extends StatefulWidget {
 }
 
 class _AccountScreenState extends State<AccountScreen> {
-  late final name = TextEditingController(text: widget.state.accountName);
-  late final balance = TextEditingController(
-    text: widget.state.openingBalance.baht.toStringAsFixed(0),
-  );
   bool dirty = false;
+
   @override
-  void dispose() {
-    name.dispose();
-    balance.dispose();
-    super.dispose();
+  void initState() {
+    super.initState();
+    if (widget.state.onboardingAccounts.isEmpty) {
+      widget.state.onboardingAccounts = [
+        OnboardingAccountInput(
+          id: 'primary',
+          name: widget.state.accountName,
+          type: 'bank',
+          openingBalance: widget.state.openingBalance,
+        ),
+      ];
+      widget.state.salaryAccountDraftId = 'primary';
+    }
   }
 
   void back() async {
@@ -326,55 +331,209 @@ class _AccountScreenState extends State<AccountScreen> {
     }
   }
 
+  Future<void> editAccount([OnboardingAccountInput? existing]) async {
+    final result = await Navigator.push<OnboardingAccountInput>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _AccountDraftEditor(existing: existing),
+      ),
+    );
+    if (result == null || !mounted) return;
+    setState(() {
+      final index = widget.state.onboardingAccounts.indexWhere(
+        (item) => item.id == result.id,
+      );
+      if (index < 0) {
+        widget.state.onboardingAccounts.add(result);
+      } else {
+        widget.state.onboardingAccounts[index] = result;
+      }
+      widget.state.salaryAccountDraftId ??= result.id;
+      dirty = true;
+    });
+  }
+
   @override
-  Widget build(BuildContext context) => _FormShell(
-    title: 'บัญชีและยอดเริ่มต้น',
-    onBack: back,
-    nextEnabled:
-        name.text.trim().isNotEmpty &&
-        (double.tryParse(balance.text) ?? -1) >= 0,
-    onNext: () {
-      widget.state.accountName = name.text.trim();
-      widget.state.openingBalance = Money.fromBaht(double.parse(balance.text));
-      widget.state.go(AppStep.recurring);
-    },
-    children: [
-      const Text(
-        'ยอด Required ตอนเพิ่มบัญชีแต่ละใบ',
-        style: TextStyle(color: AppColors.muted),
-      ),
-      const SizedBox(height: 18),
-      TextField(
-        controller: name,
-        decoration: const InputDecoration(labelText: 'ชื่อบัญชี'),
-        onChanged: (_) => setState(() => dirty = true),
-      ),
-      const SizedBox(height: 14),
-      TextField(
-        controller: balance,
-        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-        decoration: const InputDecoration(
-          labelText: 'ยอดเริ่มต้น',
-          suffixText: 'บาท',
+  Widget build(BuildContext context) {
+    final total = widget.state.onboardingAccounts.fold<Money>(
+      Money.zero,
+      (sum, item) => sum + item.openingBalance,
+    );
+    return _FormShell(
+      title: 'บัญชีและยอดเริ่มต้น',
+      onBack: back,
+      nextEnabled: widget.state.onboardingAccounts.isNotEmpty,
+      onNext: () {
+        final salary = widget.state.onboardingAccounts.firstWhere(
+          (item) => item.id == widget.state.salaryAccountDraftId,
+          orElse: () => widget.state.onboardingAccounts.first,
+        );
+        widget.state.accountName = salary.name;
+        widget.state.openingBalance = salary.openingBalance;
+        widget.state.go(AppStep.recurring);
+      },
+      children: [
+        const Text(
+          'ยอด Required ตอนเพิ่มบัญชีแต่ละใบ',
+          style: TextStyle(color: AppColors.muted),
         ),
-        onChanged: (_) => setState(() => dirty = true),
-      ),
-      const SizedBox(height: 18),
-      _DarkCard(
-        label: 'เงินจริงรวม (Demo)',
-        value: _money(
-          Money.fromBaht((double.tryParse(balance.text) ?? 0) + 1200),
+        const SizedBox(height: 18),
+        for (final account in widget.state.onboardingAccounts)
+          Card(
+            child: ListTile(
+              onTap: () => editAccount(account),
+              leading: Icon(
+                account.type == 'wallet' ? Icons.wallet : Icons.account_balance,
+              ),
+              title: Text(account.name),
+              subtitle: Text(
+                account.id == widget.state.salaryAccountDraftId
+                    ? 'บัญชีเงินเดือน'
+                    : account.type,
+              ),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(_money(account.openingBalance)),
+                  IconButton(
+                    onPressed: widget.state.onboardingAccounts.length == 1
+                        ? null
+                        : () => setState(() {
+                            widget.state.onboardingAccounts.removeWhere(
+                              (item) => item.id == account.id,
+                            );
+                            if (widget.state.salaryAccountDraftId ==
+                                account.id) {
+                              widget.state.salaryAccountDraftId =
+                                  widget.state.onboardingAccounts.first.id;
+                            }
+                            dirty = true;
+                          }),
+                    icon: const Icon(Icons.delete_outline),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        _DarkCard(
+          label: 'เงินจริงรวม',
+          value: _money(total),
+          note:
+              'ผลรวมยอดตั้งต้น ${widget.state.onboardingAccounts.length} บัญชี',
         ),
-        note: '${name.text} + เงินสด',
-      ),
-      const SizedBox(height: 12),
-      OutlinedButton.icon(
-        onPressed: () {},
-        icon: const Icon(Icons.add),
-        label: const Text('เพิ่มบัญชีอื่นภายหลัง'),
-      ),
-    ],
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: editAccount,
+          icon: const Icon(Icons.add),
+          label: const Text('เพิ่มบัญชี'),
+        ),
+      ],
+    );
+  }
+}
+
+class _AccountDraftEditor extends StatefulWidget {
+  const _AccountDraftEditor({this.existing});
+  final OnboardingAccountInput? existing;
+  @override
+  State<_AccountDraftEditor> createState() => _AccountDraftEditorState();
+}
+
+class _AccountDraftEditorState extends State<_AccountDraftEditor> {
+  late final name = TextEditingController(text: widget.existing?.name ?? '');
+  late final balance = TextEditingController(
+    text: widget.existing?.openingBalance.baht.toStringAsFixed(0) ?? '0',
   );
+  late String type = widget.existing?.type ?? 'bank';
+  bool submitting = false;
+
+  @override
+  void dispose() {
+    name.dispose();
+    balance.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final amount = double.tryParse(balance.text);
+    final valid = name.text.trim().isNotEmpty && amount != null;
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.existing == null ? 'เพิ่มบัญชี' : 'แก้บัญชี'),
+      ),
+      body: SafeArea(
+        child: ListView(
+          padding: EdgeInsets.fromLTRB(
+            20,
+            20,
+            20,
+            MediaQuery.viewInsetsOf(context).bottom + 20,
+          ),
+          children: [
+            TextField(
+              controller: name,
+              autofocus: true,
+              decoration: const InputDecoration(labelText: 'ชื่อบัญชี *'),
+              onChanged: (_) => setState(() {}),
+            ),
+            const SizedBox(height: 16),
+            const Text('ประเภทบัญชี'),
+            const SizedBox(height: 8),
+            SegmentedButton<String>(
+              segments: const [
+                ButtonSegment(value: 'bank', label: Text('ธนาคาร')),
+                ButtonSegment(value: 'wallet', label: Text('Wallet')),
+                ButtonSegment(value: 'cash', label: Text('เงินสด')),
+              ],
+              selected: {type},
+              onSelectionChanged: (value) => setState(() => type = value.first),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: balance,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
+              ],
+              decoration: const InputDecoration(
+                labelText: 'ยอดเริ่มต้น',
+                suffixText: 'บาท',
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'ยอดตั้งต้นไม่ใช่รายรับ และจะไม่แสดงใน Activity',
+              style: TextStyle(color: AppColors.muted),
+            ),
+            const SizedBox(height: 24),
+            FilledButton(
+              onPressed: !valid || submitting
+                  ? null
+                  : () {
+                      setState(() => submitting = true);
+                      Navigator.pop(
+                        context,
+                        OnboardingAccountInput(
+                          id:
+                              widget.existing?.id ??
+                              DateTime.now().microsecondsSinceEpoch.toString(),
+                          name: name.text.trim(),
+                          type: type,
+                          openingBalance: Money.fromBaht(amount),
+                        ),
+                      );
+                    },
+              child: const Text('บันทึกบัญชี'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class RecurringScreen extends StatelessWidget {
@@ -408,17 +567,43 @@ class RecurringScreen extends StatelessWidget {
   );
 }
 
-class SavingScreen extends StatelessWidget {
+class SavingScreen extends StatefulWidget {
   const SavingScreen({required this.state, super.key});
   final AppState state;
   @override
+  State<SavingScreen> createState() => _SavingScreenState();
+}
+
+class _SavingScreenState extends State<SavingScreen> {
+  late final saving = TextEditingController(
+    text: widget.state.savingTarget.baht.toStringAsFixed(0),
+  );
+  late final emergency = TextEditingController(
+    text: widget.state.emergencyTarget.baht.toStringAsFixed(0),
+  );
+  @override
+  void dispose() {
+    saving.dispose();
+    emergency.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) => _FormShell(
     title: 'เป้าหมายเงินออม',
-    onBack: () => state.go(AppStep.recurring),
-    onNext: state.completeOnboarding,
+    onBack: () => widget.state.go(AppStep.recurring),
+    onNext: () {
+      widget.state.savingTarget = Money.fromBaht(
+        double.tryParse(saving.text) ?? 0,
+      );
+      widget.state.emergencyTarget = Money.fromBaht(
+        double.tryParse(emergency.text) ?? 0,
+      );
+      widget.state.completeOnboarding();
+    },
     children: [
-      TextFormField(
-        initialValue: state.savingTarget.baht.toStringAsFixed(0),
+      TextField(
+        controller: saving,
         keyboardType: TextInputType.number,
         decoration: const InputDecoration(
           labelText: 'ออมต่อรอบ',
@@ -426,8 +611,8 @@ class SavingScreen extends StatelessWidget {
         ),
       ),
       const SizedBox(height: 14),
-      TextFormField(
-        initialValue: state.emergencyTarget.baht.toStringAsFixed(0),
+      TextField(
+        controller: emergency,
         keyboardType: TextInputType.number,
         decoration: const InputDecoration(
           labelText: 'เป้าหมายฉุกเฉิน',
@@ -435,14 +620,21 @@ class SavingScreen extends StatelessWidget {
         ),
       ),
       const SizedBox(height: 14),
-      const DropdownMenu<String>(
-        expandedInsets: EdgeInsets.zero,
-        label: Text('บัญชีออมแยก'),
-        initialSelection: 'later',
-        dropdownMenuEntries: [
-          DropdownMenuEntry(value: 'later', label: 'เชื่อมภายหลัง'),
-        ],
-      ),
+      const Text('บัญชีออมแยก (เลือกภายหลังได้)'),
+      const SizedBox(height: 8),
+      for (final account in widget.state.onboardingAccounts)
+        ListTile(
+          selected: account.id == widget.state.savingsAccountDraftId,
+          leading: Icon(
+            account.id == widget.state.savingsAccountDraftId
+                ? Icons.radio_button_checked
+                : Icons.radio_button_off,
+          ),
+          title: Text(account.name),
+          subtitle: Text(account.type),
+          onTap: () =>
+              setState(() => widget.state.savingsAccountDraftId = account.id),
+        ),
       const SizedBox(height: 16),
       const _Info(
         'เงินฉุกเฉินจะคำนวณหลังเชื่อมบัญชีออม ห้ามนับยอดรวมให้อัตโนมัติ',

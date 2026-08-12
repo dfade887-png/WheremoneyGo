@@ -136,4 +136,52 @@ void main() {
     expect(await store.accounts(), isEmpty);
     expect(await store.categories(), isEmpty);
   });
+
+  test('multi-account onboarding persists roles without forced cash', () async {
+    final store = LocalFinanceStore.memory();
+    await store.saveOnboardingProfile(
+      LocalProfile(
+        payday: 25,
+        holidayRule: 'before',
+        accountName: 'SCB',
+        openingBalance: Money.fromBaht(5000),
+        savingTarget: Money.fromBaht(2500),
+        emergencyTarget: Money.fromBaht(30000),
+        foodSpent: Money.zero,
+      ),
+      accounts: [
+        OnboardingAccountInput(
+          id: 'scb',
+          name: 'SCB',
+          type: 'bank',
+          openingBalance: Money.fromBaht(5000),
+        ),
+        OnboardingAccountInput(
+          id: 'ktb',
+          name: 'Krungthai',
+          type: 'bank',
+          openingBalance: Money.fromBaht(7000),
+        ),
+        OnboardingAccountInput(
+          id: 'wallet',
+          name: 'TrueMoney',
+          type: 'wallet',
+          openingBalance: Money.zero,
+        ),
+      ],
+      salaryAccountDraftId: 'scb',
+      savingsAccountDraftId: 'ktb',
+    );
+
+    final accounts = await store.accounts();
+    expect(
+      accounts.map((row) => row['name']),
+      containsAll(['SCB', 'Krungthai', 'TrueMoney']),
+    );
+    expect(accounts.where((row) => row['account_type'] == 'cash'), isEmpty);
+    expect(
+      accounts.fold<int>(0, (sum, row) => sum + (row['balance_satang'] as int)),
+      Money.fromBaht(12000).satang,
+    );
+  });
 }

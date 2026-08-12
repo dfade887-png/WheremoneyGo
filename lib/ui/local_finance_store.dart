@@ -25,6 +25,18 @@ final class LocalProfile {
   final Money openingBalance, savingTarget, emergencyTarget, foodSpent;
 }
 
+final class OnboardingAccountInput {
+  OnboardingAccountInput({
+    required this.id,
+    required this.name,
+    required this.type,
+    required this.openingBalance,
+  });
+  final String id;
+  String name, type;
+  Money openingBalance;
+}
+
 final class LocalFinanceStore {
   LocalFinanceStore._(this.repository);
   final SqliteFinanceRepository repository;
@@ -338,6 +350,55 @@ final class LocalFinanceStore {
     } catch (_) {
       repository.execute('ROLLBACK');
       rethrow;
+    }
+  }
+
+  Future<void> saveOnboardingProfile(
+    LocalProfile profile, {
+    required List<OnboardingAccountInput> accounts,
+    required String salaryAccountDraftId,
+    String? savingsAccountDraftId,
+  }) async {
+    await saveProfile(profile);
+    final now = DateTime.now().toUtc().toIso8601String();
+    for (final draft in accounts) {
+      final id = draft.id == salaryAccountDraftId
+          ? _accountId
+          : _scopedId('account-${draft.id}');
+      repository.execute(
+        '''INSERT INTO accounts(id,name,opening_balance_satang,is_active,include_in_net_worth,account_type,is_salary_account,created_at,updated_at,profile_id)
+           VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+           name=excluded.name,opening_balance_satang=excluded.opening_balance_satang,
+           account_type=excluded.account_type,is_salary_account=excluded.is_salary_account,
+           is_active=1,updated_at=excluded.updated_at''',
+        [
+          id,
+          draft.name.trim(),
+          draft.openingBalance.satang,
+          1,
+          1,
+          draft.type,
+          draft.id == salaryAccountDraftId ? 1 : 0,
+          now,
+          now,
+          repository.activeProfileId,
+        ],
+      );
+      if (draft.id == savingsAccountDraftId) {
+        repository.execute(
+          '''INSERT INTO profile_settings(id,profile_id,key,value,created_at,updated_at)
+             VALUES(?,?,?,?,?,?) ON CONFLICT(profile_id,key) DO UPDATE SET
+             value=excluded.value,updated_at=excluded.updated_at,deleted_at=NULL''',
+          [
+            _uuid.v4(),
+            repository.activeProfileId,
+            'savings_account_id',
+            id,
+            now,
+            now,
+          ],
+        );
+      }
     }
   }
 

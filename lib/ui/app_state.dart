@@ -34,6 +34,9 @@ final class AppState extends ChangeNotifier {
   Money foodSpent = Money.fromBaht(2040);
   Money savingTarget = Money.fromBaht(2500);
   Money emergencyTarget = Money.fromBaht(30000);
+  List<OnboardingAccountInput> onboardingAccounts = [];
+  String? salaryAccountDraftId;
+  String? savingsAccountDraftId;
   InstallmentProgress? phoneProgress;
   List<Map<String, Object?>> accounts = const [];
   List<Map<String, Object?>> categories = const [];
@@ -60,6 +63,15 @@ final class AppState extends ChangeNotifier {
         foodSpent = profile.foodSpent;
         step = AppStep.dashboard;
         phoneProgress = await _store!.loadInstallmentProgress('phone');
+        onboardingAccounts = [
+          OnboardingAccountInput(
+            id: 'primary',
+            name: profile.accountName,
+            type: 'bank',
+            openingBalance: profile.openingBalance,
+          ),
+        ];
+        salaryAccountDraftId = 'primary';
       }
       await refreshDailyData();
       initialized = true;
@@ -76,7 +88,16 @@ final class AppState extends ChangeNotifier {
     viewStatus = ViewStatus.loading;
     notifyListeners();
     try {
-      await _store!.saveProfile(
+      if (onboardingAccounts.isEmpty) {
+        throw StateError('ต้องมีบัญชีอย่างน้อยหนึ่งบัญชี');
+      }
+      final salary = onboardingAccounts.firstWhere(
+        (item) => item.id == salaryAccountDraftId,
+        orElse: () => onboardingAccounts.first,
+      );
+      accountName = salary.name;
+      openingBalance = salary.openingBalance;
+      await _store!.saveOnboardingProfile(
         LocalProfile(
           payday: payday,
           holidayRule: holidayRule,
@@ -86,6 +107,9 @@ final class AppState extends ChangeNotifier {
           emergencyTarget: emergencyTarget,
           foodSpent: foodSpent,
         ),
+        accounts: onboardingAccounts,
+        salaryAccountDraftId: salary.id,
+        savingsAccountDraftId: savingsAccountDraftId,
       );
       await refreshDailyData();
       step = AppStep.dashboard;
@@ -149,6 +173,9 @@ final class AppState extends ChangeNotifier {
     payday = 25;
     accountName = '';
     openingBalance = Money.zero;
+    onboardingAccounts = [];
+    salaryAccountDraftId = null;
+    savingsAccountDraftId = null;
     foodSpent = Money.zero;
     savingTarget = Money.zero;
     emergencyTarget = Money.zero;

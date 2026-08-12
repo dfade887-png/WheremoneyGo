@@ -32,8 +32,8 @@ void main() {
   setUp(() => repo = SqliteFinanceRepository.memory());
   tearDown(() => repo.dispose());
 
-  test('migration v1 creates and reports schema version', () async {
-    expect(await repo.schemaVersion(), 1);
+  test('repository migrates to latest schema version', () async {
+    expect(await repo.schemaVersion(), 2);
     expect(repo.query("SELECT name FROM sqlite_master WHERE type='table' AND name='statement_rows'"), isNotEmpty);
   });
 

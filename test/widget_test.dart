@@ -19,7 +19,7 @@ void main() {
       await tester.pumpAndSettle();
     }
     expect(find.text('วันนี้ยังรอด'), findsOneWidget);
-    expect(find.text('DEMO DATA'), findsOneWidget);
+    expect(find.text('LOCAL DATA • ข้อมูลจริง'), findsOneWidget);
   });
   testWidgets('quick add requires amount and category', (tester) async {
     await tester.pumpWidget(

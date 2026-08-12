@@ -4,6 +4,7 @@ import '../core/money.dart';
 import '../domain/models/financial_models.dart';
 import 'app_state.dart';
 import 'theme/app_theme.dart';
+import 'daily_driver_screen.dart';
 
 class FinanceApp extends StatefulWidget {
   const FinanceApp({this.state, super.key});
@@ -475,12 +476,12 @@ class DashboardScreen extends StatelessWidget {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const _DemoPill(),
+                      const _DataPill(),
                       IconButton(
                         onPressed: () => Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (_) => const BankNotificationSetupScreen(),
+                            builder: (_) => DailyDriverScreen(state: state),
                           ),
                         ),
                         tooltip: 'ตั้งค่า',
@@ -622,13 +623,12 @@ class DashboardScreen extends StatelessWidget {
                   const SizedBox(height: 12),
                   FilledButton.icon(
                     onPressed: () async {
-                      final amount = await showModalBottomSheet<Money>(
+                      await showModalBottomSheet<void>(
                         context: context,
                         isScrollControlled: true,
                         useSafeArea: true,
-                        builder: (_) => const QuickAddSheet(),
+                        builder: (_) => DailyQuickAdd(state: state),
                       );
-                      if (amount != null) await state.addFoodExpense(amount);
                     },
                     icon: const Icon(Icons.add),
                     label: const Text('บันทึกรายการเร็ว'),
@@ -1252,8 +1252,8 @@ class _Info extends StatelessWidget {
   );
 }
 
-class _DemoPill extends StatelessWidget {
-  const _DemoPill();
+class _DataPill extends StatelessWidget {
+  const _DataPill();
   @override
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -1262,7 +1262,7 @@ class _DemoPill extends StatelessWidget {
       borderRadius: BorderRadius.circular(99),
     ),
     child: const Text(
-      'DEMO DATA',
+      'LOCAL DATA • ข้อมูลจริง',
       style: TextStyle(color: Colors.white, fontSize: 10, letterSpacing: 1),
     ),
   );

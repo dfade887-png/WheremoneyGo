@@ -35,6 +35,10 @@ final class AppState extends ChangeNotifier {
   Money savingTarget = Money.fromBaht(2500);
   Money emergencyTarget = Money.fromBaht(30000);
   InstallmentProgress? phoneProgress;
+  List<Map<String, Object?>> accounts = const [];
+  List<Map<String, Object?>> categories = const [];
+  List<Map<String, Object?>> activities = const [];
+  List<Map<String, Object?>> commitments = const [];
 
   Future<void> initialize() async {
     viewStatus = ViewStatus.loading;
@@ -53,6 +57,7 @@ final class AppState extends ChangeNotifier {
         step = AppStep.dashboard;
         phoneProgress = await _store!.loadInstallmentProgress('phone');
       }
+      await refreshDailyData();
       initialized = true;
       viewStatus = ViewStatus.ready;
     } catch (_) {
@@ -73,14 +78,16 @@ final class AppState extends ChangeNotifier {
         foodSpent: foodSpent,
       ),
     );
+    await refreshDailyData();
     go(AppStep.dashboard);
   }
 
   FinanceSnapshot get snapshot {
-    final currentCash = FinancialRules.currentCash([
-      openingBalance,
-      Money.fromBaht(1200),
-    ]);
+    final currentCash = Money.fromSatang(
+      accounts
+          .where((a) => a['is_active'] == 1 && a['include_in_net_worth'] == 1)
+          .fold<int>(0, (sum, a) => sum + ((a['balance_satang'] as int?) ?? 0)),
+    );
     final flexible = FinancialRules.remainingFlexible(
       Money.fromBaht(5626),
       Money.zero,
@@ -96,6 +103,145 @@ final class AppState extends ChangeNotifier {
       ),
       foodSpent: foodSpent,
     );
+  }
+
+  Future<void> refreshDailyData() async {
+    accounts = await _store!.accounts();
+    categories = await _store!.categories();
+    activities = await _store!.activity();
+    commitments = await _store!.commitments();
+    notifyListeners();
+  }
+
+  Future<void> addAccount(String name, String type, Money opening) async {
+    await _store!.addAccount(name: name, type: type, openingBalance: opening);
+    await refreshDailyData();
+  }
+
+  Future<void> addCategory(String name, String type, String iconKey) async {
+    await _store!.addCategory(name: name, type: type, iconKey: iconKey);
+    await refreshDailyData();
+  }
+
+  Future<void> addDailyTransaction({
+    required String accountId,
+    required String categoryId,
+    required String type,
+    required Money amount,
+    String? note,
+  }) async {
+    await _store!.addTransaction(
+      accountId: accountId,
+      categoryId: categoryId,
+      type: type,
+      amount: amount,
+      note: note,
+    );
+    await refreshDailyData();
+  }
+
+  Future<void> addTransfer(String from, String to, Money amount) async {
+    await _store!.transfer(
+      fromAccountId: from,
+      toAccountId: to,
+      amount: amount,
+    );
+    await refreshDailyData();
+  }
+
+  Future<void> removeTransaction(String id) async {
+    await _store!.deleteTransaction(id);
+    await refreshDailyData();
+  }
+
+  Future<void> undoTransaction(String id) async {
+    await _store!.restoreDeletedTransaction(id);
+    await refreshDailyData();
+  }
+
+  Future<void> resetAllData() async {
+    await _store!.resetAll();
+    accounts = const [];
+    categories = const [];
+    activities = const [];
+    commitments = const [];
+    step = AppStep.welcome;
+    notifyListeners();
+  }
+
+  Future<String> createBackup() => _store!.backupToFile();
+
+  Future<void> addCommitment({
+    required String name,
+    required String type,
+    int? totalSatang,
+    int? regularSatang,
+    String? accountId,
+    String? categoryId,
+  }) async {
+    await _store!.addCommitment(
+      name: name,
+      type: type,
+      totalSatang: totalSatang,
+      regularSatang: regularSatang,
+      accountId: accountId,
+      categoryId: categoryId,
+    );
+    await refreshDailyData();
+  }
+
+  Future<void> payCommitment({
+    required String commitmentId,
+    required String accountId,
+    required String categoryId,
+    required Money amount,
+  }) async {
+    await _store!.payCommitment(
+      commitmentId: commitmentId,
+      accountId: accountId,
+      categoryId: categoryId,
+      amount: amount,
+    );
+    await refreshDailyData();
+  }
+
+  Future<void> archiveDailyAccount(String id) async {
+    await _store!.archiveAccount(id);
+    await refreshDailyData();
+  }
+
+  Future<void> restoreDailyAccount(String id) async {
+    await _store!.restoreAccount(id);
+    await refreshDailyData();
+  }
+
+  Future<void> updateDailyAccount(String id, String name, String type) async {
+    await _store!.updateAccount(id, name, type);
+    await refreshDailyData();
+  }
+
+  Future<void> adjustDailyAccount(String id, Money delta, String reason) async {
+    await _store!.adjustAccount(id, delta, reason);
+    await refreshDailyData();
+  }
+
+  Future<void> editDailyTransaction({
+    required String id,
+    required String accountId,
+    required String categoryId,
+    required Money amount,
+    required DateTime occurredAt,
+    String? note,
+  }) async {
+    await _store!.updateTransaction(
+      id: id,
+      accountId: accountId,
+      categoryId: categoryId,
+      amount: amount,
+      occurredAt: occurredAt,
+      note: note,
+    );
+    await refreshDailyData();
   }
 
   void go(AppStep value) {

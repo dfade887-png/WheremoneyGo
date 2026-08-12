@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -42,6 +43,126 @@ final class LocalFinanceStore {
 
   static LocalFinanceStore memory() =>
       LocalFinanceStore._(SqliteFinanceRepository.memory());
+
+  Future<List<Map<String, Object?>>> accounts({bool includeArchived = true}) =>
+      repository.accounts(includeArchived: includeArchived);
+
+  Future<List<Map<String, Object?>>> categories({String? type}) =>
+      repository.categories(type: type);
+
+  Future<List<Map<String, Object?>>> activity({bool includeDeleted = false}) =>
+      repository.activity(includeDeleted: includeDeleted);
+
+  Future<String> addAccount({
+    required String name,
+    required String type,
+    required Money openingBalance,
+  }) => repository.createAccount(
+    name: name,
+    type: type,
+    openingBalanceSatang: openingBalance.satang,
+  );
+
+  Future<String> addCategory({
+    required String name,
+    required String type,
+    required String iconKey,
+  }) => repository.createCategory(name: name, type: type, iconKey: iconKey);
+
+  Future<String> addTransaction({
+    required String accountId,
+    required String categoryId,
+    required String type,
+    required Money amount,
+    DateTime? occurredAt,
+    String? note,
+  }) => repository.createTransaction(
+    accountId: accountId,
+    categoryId: categoryId,
+    type: type,
+    amountSatang: amount.satang,
+    occurredAt: occurredAt,
+    note: note,
+  );
+
+  Future<String> transfer({
+    required String fromAccountId,
+    required String toAccountId,
+    required Money amount,
+  }) => repository.createTransfer(
+    fromAccountId: fromAccountId,
+    toAccountId: toAccountId,
+    amountSatang: amount.satang,
+  );
+
+  Future<void> archiveAccount(String id) => repository.archiveAccount(id);
+  Future<void> restoreAccount(String id) => repository.restoreAccount(id);
+  Future<void> updateAccount(String id, String name, String type) =>
+      repository.updateAccount(id, name: name, type: type);
+  Future<String> adjustAccount(String id, Money delta, String reason) =>
+      repository.adjustBalance(
+        accountId: id,
+        deltaSatang: delta.satang,
+        reason: reason,
+      );
+  Future<void> deleteTransaction(String id) =>
+      repository.softDeleteTransaction(id);
+  Future<void> restoreDeletedTransaction(String id) =>
+      repository.restoreTransactionRecord(id);
+  Future<void> updateTransaction({
+    required String id,
+    required String accountId,
+    required String categoryId,
+    required Money amount,
+    required DateTime occurredAt,
+    String? note,
+  }) => repository.updateTransaction(
+    id: id,
+    accountId: accountId,
+    categoryId: categoryId,
+    amountSatang: amount.satang,
+    occurredAt: occurredAt,
+    note: note,
+  );
+  Future<Map<String, Object?>> backup() => repository.exportBackup();
+  Future<String> backupToFile() async {
+    final directory = await getApplicationDocumentsDirectory();
+    final path = p.join(
+      directory.path,
+      'backup-${DateTime.now().millisecondsSinceEpoch}.json',
+    );
+    await File(path).writeAsString(jsonEncode(await backup()), flush: true);
+    return path;
+  }
+
+  Future<void> resetAll() => repository.resetUserData();
+  Future<List<Map<String, Object?>>> commitments() => repository.commitments();
+  Future<String> addCommitment({
+    required String name,
+    required String type,
+    int? totalSatang,
+    int? regularSatang,
+    String? accountId,
+    String? categoryId,
+  }) => repository.createCommitment(
+    name: name,
+    type: type,
+    totalSatang: totalSatang,
+    regularSatang: regularSatang,
+    accountId: accountId,
+    categoryId: categoryId,
+  );
+  Future<String> payCommitment({
+    required String commitmentId,
+    required String accountId,
+    required String categoryId,
+    required Money amount,
+  }) => repository.recordCommitmentPayment(
+    commitmentId: commitmentId,
+    accountId: accountId,
+    categoryId: categoryId,
+    amountSatang: amount.satang,
+  );
 
   Future<LocalProfile?> loadProfile() async {
     final rows = repository.query(
@@ -90,6 +211,10 @@ final class LocalFinanceStore {
     repository.execute(
       'INSERT OR REPLACE INTO app_settings(id,key,value,created_at,updated_at) VALUES(COALESCE((SELECT id FROM app_settings WHERE key=?),?),?,?,?,?)',
       [_profileKey, _uuid.v4(), _profileKey, value, now, now],
+    );
+    repository.execute(
+      'INSERT OR REPLACE INTO app_settings(id,key,value,created_at,updated_at) VALUES(COALESCE((SELECT id FROM app_settings WHERE key=?),?),?,?,?,?)',
+      ['data_mode', _uuid.v4(), 'data_mode', 'production', now, now],
     );
     repository.execute(
       'INSERT OR REPLACE INTO accounts(id,name,opening_balance_satang,is_active,include_in_net_worth,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',

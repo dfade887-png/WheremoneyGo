@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../core/money.dart';
 import '../domain/models/financial_models.dart';
+import '../domain/payday_calendar.dart';
 import 'app_state.dart';
 import 'theme/app_theme.dart';
 import 'daily_driver_screen.dart';
@@ -256,6 +257,20 @@ class _PaydayScreenState extends State<PaydayScreen> {
   @override
   Widget build(BuildContext context) {
     final day = int.tryParse(controller.text);
+    final policy = switch (widget.state.holidayRule) {
+      'after' => PaydayHolidayPolicy.after,
+      'same' => PaydayHolidayPolicy.exact,
+      _ => PaydayHolidayPolicy.before,
+    };
+    final now = DateTime.now();
+    final preview = day == null || day < 1 || day > 31
+        ? null
+        : PaydayCalendar.resolve(
+            year: now.year,
+            month: now.month + 1,
+            payday: day,
+            policy: policy,
+          );
     return _FormShell(
       title: 'วันเงินเดือนออก',
       onBack: back,
@@ -293,7 +308,11 @@ class _PaydayScreenState extends State<PaydayScreen> {
           }),
         ),
         const SizedBox(height: 16),
-        const _Info('ใช้ค่านี้แบ่ง “รอบเงินเดือน” ไม่ได้ Hardcode ไว้ในแอป'),
+        _Info(
+          preview == null
+              ? 'กรอกวันที่ 1–31 เพื่อคำนวณรอบเงินเดือน'
+              : 'รอบถัดไปเริ่ม ${preview.day}/${preview.month}/${preview.year} • เดือนที่ไม่มีวันที่นี้จะใช้วันสุดท้ายของเดือน',
+        ),
       ],
     );
   }

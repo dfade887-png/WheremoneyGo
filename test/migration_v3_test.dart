@@ -10,7 +10,7 @@ void main() {
   test('schema v3 creates daily driver tables', () async {
     final repository = SqliteFinanceRepository.memory();
     addTearDown(repository.dispose);
-    expect(await repository.schemaVersion(), 3);
+    expect(await repository.schemaVersion(), 4);
     expect(
       repository
           .query(
@@ -27,6 +27,7 @@ void main() {
     MigrationRunner.migrateToLatest(
       db,
       v3Statements: ['PRAGMA user_version = 2'],
+      v4Statements: ['PRAGMA user_version = 2'],
     );
     final now = DateTime.utc(2026, 8, 12).toIso8601String();
     db.execute(
@@ -68,6 +69,7 @@ void main() {
     MigrationRunner.migrateToLatest(
       db,
       v3Statements: ['PRAGMA user_version = 2'],
+      v4Statements: ['PRAGMA user_version = 2'],
     );
     expect(
       () => MigrationRunner.migrateToLatest(
@@ -109,7 +111,7 @@ void main() {
         'checksum': sha256.convert(utf8.encode(payload)).toString(),
       });
       expect((await target.accounts()).single['opening_balance_satang'], 12345);
-      expect(await target.schemaVersion(), 3);
+      expect(await target.schemaVersion(), 4);
     },
   );
 }

@@ -457,6 +457,18 @@ class DashboardScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final data = state.snapshot;
+    final projection = state.projectionSnapshot;
+    final foodBudget = projection?.categoryBudgets
+        .where((item) => item.name == 'อาหาร')
+        .firstOrNull;
+    final foodRatio = (foodBudget?.budgetUsedRatio ?? 0).clamp(0.0, 1.0);
+    final accountBreakdown = state.accounts
+        .where((account) => account['is_active'] == 1)
+        .map(
+          (account) =>
+              '${account['name']} ${_money(Money.fromSatang(account['balance_satang'] as int))}',
+        )
+        .toList();
     return Scaffold(
       backgroundColor: const Color(0xFFEDF1EE),
       body: SafeArea(
@@ -524,10 +536,13 @@ class DashboardScreen extends StatelessWidget {
                         ),
                       ),
                       TextButton(
-                        onPressed: () => _breakdown(context, 'เงินจริงรวม', [
-                          'บัญชีเงินเดือน ${_money(state.openingBalance)}',
-                          'เงินสด ฿1,200',
-                        ]),
+                        onPressed: () => _breakdown(
+                          context,
+                          'เงินจริงรวม',
+                          accountBreakdown.isEmpty
+                              ? ['ยังไม่มีบัญชีที่เปิดใช้งาน']
+                              : accountBreakdown,
+                        ),
                         child: const Text(
                           'ดูที่มา',
                           style: TextStyle(color: AppColors.mint),
@@ -548,11 +563,12 @@ class DashboardScreen extends StatelessWidget {
                         child: _MetricCard(
                           label: 'วันนี้ใช้ได้',
                           value: _money(data.dailyAllowance),
-                          note: 'งบคงเหลือ ÷ 30 วัน',
+                          note:
+                              'งบคงเหลือ ÷ ${projection?.daysRemaining ?? 1} วัน',
                           tone: AppColors.mintSoft,
                           onTap: () => _breakdown(context, 'งบใช้ได้วันนี้', [
-                            'งบยืดหยุ่นคงเหลือ',
-                            '÷ จำนวนวันที่เหลือ',
+                            'งบยืดหยุ่นคงเหลือ ${_money(projection?.flexibleMoneyRemaining ?? Money.zero)}',
+                            '÷ ${projection?.daysRemaining ?? 1} วันที่เหลือ',
                             '= ${_money(data.dailyAllowance)}',
                           ]),
                         ),
@@ -563,56 +579,77 @@ class DashboardScreen extends StatelessWidget {
                           label: 'Forecast สิ้นรอบ',
                           value: _money(data.forecast),
                           note: 'เหลือตามแผน',
-                          onTap: () =>
-                              _breakdown(context, 'Forecast สิ้นรอบ', const [
-                                'เงินจริง ฿17,125',
-                                '− ภาระ ฿5,999',
-                                '− อาหารและงบยืดหยุ่น ฿8,626',
-                                '= ฿2,500',
-                              ]),
+                          onTap: () => _breakdown(context, 'Forecast สิ้นรอบ', [
+                            'เงินจริง ${_money(projection?.actualMoney ?? Money.zero)}',
+                            '+ รายรับที่ยังไม่เข้า ${_money(projection?.expectedIncomeRemaining ?? Money.zero)}',
+                            '− ภาระที่ยังไม่จ่าย ${_money(projection?.unpaidObligations ?? Money.zero)}',
+                            '− งบที่ยังวางแผนใช้ ${_money(projection?.plannedFlexibleSpendRemaining ?? Money.zero)}',
+                            '= ${_money(data.forecast)}',
+                          ]),
                         ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(18),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(18),
+                  InkWell(
+                    borderRadius: BorderRadius.circular(18),
+                    onTap: () => _breakdown(
+                      context,
+                      foodBudget?.name ?? 'การใช้จ่ายตามหมวด',
+                      foodBudget == null
+                          ? ['ยังไม่ได้ตั้งงบหมวดอาหาร']
+                          : [
+                              'ใช้สุทธิ ${_money(foodBudget.spentNet)}',
+                              'งบทั้งหมด ${_money(foodBudget.budget)}',
+                              'คงเหลือ ${_money(foodBudget.remainingBudget)}',
+                              'รอบผ่านไป ${(foodBudget.cycleElapsedRatio * 100).round()}%',
+                            ],
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'เงินเริ่มไหลแรงแล้ว',
-                          style: TextStyle(
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(18),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            projection?.warnings.firstOrNull ??
+                                'รายจ่ายยังอยู่ในแผน',
+                            style: const TextStyle(
+                              color: AppColors.orange,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            foodBudget == null
+                                ? 'ยังไม่ได้ตั้งงบอาหาร'
+                                : 'อาหารใช้ไปแล้ว ${((foodBudget.budgetUsedRatio ?? 0) * 100).round()}%',
+                            style: const TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          LinearProgressIndicator(
+                            value: foodRatio,
+                            minHeight: 8,
                             color: AppColors.orange,
-                            fontWeight: FontWeight.w700,
+                            backgroundColor: Color(0xFFE4E8E5),
+                            borderRadius: BorderRadius.all(Radius.circular(99)),
                           ),
-                        ),
-                        const SizedBox(height: 4),
-                        const Text(
-                          'อาหารใช้ไปแล้ว 68%',
-                          style: TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.w700,
+                          const SizedBox(height: 8),
+                          Text(
+                            foodBudget == null
+                                ? 'แตะเพื่อตรวจรายละเอียด'
+                                : 'ใช้ ${_money(foodBudget.spentNet)} จากงบ ${_money(foodBudget.budget)}',
+                            style: const TextStyle(color: AppColors.muted),
                           ),
-                        ),
-                        const SizedBox(height: 8),
-                        const LinearProgressIndicator(
-                          value: .68,
-                          minHeight: 8,
-                          color: AppColors.orange,
-                          backgroundColor: Color(0xFFE4E8E5),
-                          borderRadius: BorderRadius.all(Radius.circular(99)),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'ใช้ ${_money(data.foodSpent)} จากงบ ฿3,000',
-                          style: const TextStyle(color: AppColors.muted),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                   const SizedBox(height: 12),

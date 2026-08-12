@@ -30,7 +30,15 @@ final class LocalFinanceStore {
   final SqliteFinanceRepository repository;
   static const _uuid = Uuid();
   static const _profileKey = 'onboarding_profile_v1';
-  static const _accountId = 'primary-account';
+  String get _accountId =>
+      repository.activeProfileId == 'legacy-default-profile'
+      ? 'primary-account'
+      : 'primary-account-${repository.activeProfileId}';
+
+  String _scopedId(String legacyId) =>
+      repository.activeProfileId == 'legacy-default-profile'
+      ? legacyId
+      : '$legacyId-${repository.activeProfileId}';
 
   static Future<LocalFinanceStore> open() async {
     final directory = await getApplicationDocumentsDirectory();
@@ -44,6 +52,16 @@ final class LocalFinanceStore {
   static LocalFinanceStore memory() =>
       LocalFinanceStore._(SqliteFinanceRepository.memory());
 
+  String get activeProfileId => repository.activeProfileId;
+  Future<List<Map<String, Object?>>> profiles({bool includeArchived = true}) =>
+      repository.profiles(includeArchived: includeArchived);
+  Future<String> createProfile(String name) => repository.createProfile(name);
+  Future<void> switchProfile(String id) => repository.switchProfile(id);
+  Future<void> renameProfile(String id, String name) =>
+      repository.renameProfile(id, name);
+  Future<void> archiveProfile(String id) => repository.archiveProfile(id);
+  Future<void> restoreProfile(String id) => repository.restoreProfile(id);
+
   Future<List<Map<String, Object?>>> accounts({bool includeArchived = true}) =>
       repository.accounts(includeArchived: includeArchived);
 
@@ -52,6 +70,51 @@ final class LocalFinanceStore {
 
   Future<List<Map<String, Object?>>> activity({bool includeDeleted = false}) =>
       repository.activity(includeDeleted: includeDeleted);
+
+  Future<Map<String, Object?>> projectionInputs() async {
+    final profile = repository.activeProfileId;
+    final budgets = repository.query(
+      '''SELECT b.category_id,c.name category_name,b.amount_satang,b.budget_type FROM period_budgets b LEFT JOIN categories c ON c.id=b.category_id WHERE b.profile_id=? AND b.deleted_at IS NULL''',
+      [profile],
+    );
+    final unpaid =
+        repository
+                .query(
+                  '''SELECT COALESCE(SUM(planned_amount_satang),0) total FROM commitment_occurrences WHERE profile_id=? AND linked_transaction_id IS NULL AND is_skipped=0 AND deleted_at IS NULL''',
+                  [profile],
+                )
+                .single['total']
+            as int;
+    final saving =
+        repository.query(
+              'SELECT COALESCE(SUM(monthly_target_satang),0) total FROM saving_goals WHERE profile_id=? AND deleted_at IS NULL',
+              [profile],
+            ).single['total']
+            as int;
+    final reserveRows = repository.query(
+      "SELECT value FROM profile_settings WHERE profile_id=? AND key='minimum_reserve_satang' AND deleted_at IS NULL",
+      [profile],
+    );
+    return {
+      'categoryBudgets': budgets
+          .where((b) => b['category_id'] != null)
+          .toList(),
+      'unpaidObligationsSatang': unpaid,
+      'plannedFlexibleSpendSatang': budgets
+          .where(
+            (b) =>
+                b['budget_type'] == 'flexible' ||
+                b['budget_type'] == 'reserved',
+          )
+          .fold<int>(0, (sum, b) => sum + (b['amount_satang'] as int)),
+      'savingReservationSatang': saving,
+      'savingGoalSatang': saving,
+      'minimumReserveSatang': reserveRows.isEmpty
+          ? 0
+          : int.tryParse(reserveRows.single['value'] as String) ?? 0,
+      'expectedIncomeRemainingSatang': 0,
+    };
+  }
 
   Future<String> addAccount({
     required String name,
@@ -166,18 +229,17 @@ final class LocalFinanceStore {
 
   Future<LocalProfile?> loadProfile() async {
     final rows = repository.query(
-      'SELECT value FROM app_settings WHERE key = ? AND deleted_at IS NULL',
-      [_profileKey],
+      'SELECT value FROM profile_settings WHERE profile_id=? AND key=? AND deleted_at IS NULL',
+      [repository.activeProfileId, _profileKey],
     );
     if (rows.isEmpty) return null;
     final json =
         jsonDecode(rows.first['value'] as String) as Map<String, dynamic>;
     final food =
-        repository
-                .query(
-                  "SELECT COALESCE(SUM(t.amount_satang),0) AS total FROM transactions t JOIN categories c ON c.id=t.category_id WHERE t.type='expense' AND t.deleted_at IS NULL AND c.name='อาหาร'",
-                )
-                .first['total']
+        repository.query(
+              "SELECT COALESCE(SUM(t.amount_satang),0) AS total FROM transactions t JOIN categories c ON c.id=t.category_id WHERE t.profile_id=? AND t.type='expense' AND t.deleted_at IS NULL AND c.name='อาหาร'",
+              [repository.activeProfileId],
+            ).first['total']
             as int;
     final movement =
         repository.query(
@@ -209,15 +271,29 @@ final class LocalFinanceStore {
       'emergencyTargetSatang': profile.emergencyTarget.satang,
     });
     repository.execute(
-      'INSERT OR REPLACE INTO app_settings(id,key,value,created_at,updated_at) VALUES(COALESCE((SELECT id FROM app_settings WHERE key=?),?),?,?,?,?)',
-      [_profileKey, _uuid.v4(), _profileKey, value, now, now],
+      '''INSERT INTO profile_settings(id,profile_id,key,value,created_at,updated_at)
+         VALUES(?,?,?,?,?,?) ON CONFLICT(profile_id,key) DO UPDATE SET
+         value=excluded.value,updated_at=excluded.updated_at,deleted_at=NULL''',
+      [_uuid.v4(), repository.activeProfileId, _profileKey, value, now, now],
     );
     repository.execute(
-      'INSERT OR REPLACE INTO app_settings(id,key,value,created_at,updated_at) VALUES(COALESCE((SELECT id FROM app_settings WHERE key=?),?),?,?,?,?)',
-      ['data_mode', _uuid.v4(), 'data_mode', 'production', now, now],
+      '''INSERT INTO profile_settings(id,profile_id,key,value,created_at,updated_at)
+         VALUES(?,?,?,?,?,?) ON CONFLICT(profile_id,key) DO UPDATE SET
+         value=excluded.value,updated_at=excluded.updated_at,deleted_at=NULL''',
+      [
+        _uuid.v4(),
+        repository.activeProfileId,
+        'data_mode',
+        'production',
+        now,
+        now,
+      ],
     );
     repository.execute(
-      'INSERT OR REPLACE INTO accounts(id,name,opening_balance_satang,is_active,include_in_net_worth,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',
+      '''INSERT INTO accounts(id,name,opening_balance_satang,is_active,include_in_net_worth,created_at,updated_at,profile_id)
+         VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+         name=excluded.name,opening_balance_satang=excluded.opening_balance_satang,
+         is_active=1,updated_at=excluded.updated_at''',
       [
         _accountId,
         profile.accountName,
@@ -226,6 +302,7 @@ final class LocalFinanceStore {
         1,
         now,
         now,
+        repository.activeProfileId,
       ],
     );
     for (final category in const [
@@ -235,8 +312,15 @@ final class LocalFinanceStore {
       ('family', 'ครอบครัว', 1),
     ]) {
       repository.execute(
-        'INSERT OR IGNORE INTO categories(id,name,is_essential,created_at,updated_at) VALUES(?,?,?,?,?)',
-        [category.$1, category.$2, category.$3, now, now],
+        'INSERT OR IGNORE INTO categories(id,name,is_essential,created_at,updated_at,profile_id) VALUES(?,?,?,?,?,?)',
+        [
+          _scopedId(category.$1),
+          category.$2,
+          category.$3,
+          now,
+          now,
+          repository.activeProfileId,
+        ],
       );
     }
   }
@@ -245,28 +329,17 @@ final class LocalFinanceStore {
     required Money amount,
     required String categoryName,
   }) async {
-    final now = DateTime.now().toUtc().toIso8601String();
     final categories = repository.query(
-      'SELECT id FROM categories WHERE name=? AND deleted_at IS NULL LIMIT 1',
-      [categoryName],
+      'SELECT id FROM categories WHERE profile_id=? AND name=? AND deleted_at IS NULL LIMIT 1',
+      [repository.activeProfileId, categoryName],
     );
     if (categories.isEmpty) throw StateError('Category is not configured');
-    final id = _uuid.v4();
-    repository.execute(
-      'INSERT INTO transactions(id,account_id,category_id,type,amount_satang,occurred_at,source,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',
-      [
-        id,
-        _accountId,
-        categories.first['id'],
-        'expense',
-        amount.satang,
-        now,
-        'manual',
-        now,
-        now,
-      ],
+    return repository.createTransaction(
+      accountId: _accountId,
+      categoryId: categories.first['id'] as String,
+      type: 'expense',
+      amountSatang: amount.satang,
     );
-    return id;
   }
 
   Future<void> editExpense(
@@ -275,17 +348,18 @@ final class LocalFinanceStore {
     required String categoryName,
   }) async {
     final category = repository.query(
-      'SELECT id FROM categories WHERE name=? AND deleted_at IS NULL LIMIT 1',
-      [categoryName],
+      'SELECT id FROM categories WHERE profile_id=? AND name=? AND deleted_at IS NULL LIMIT 1',
+      [repository.activeProfileId, categoryName],
     );
     if (category.isEmpty) throw StateError('Category is not configured');
     repository.execute(
-      "UPDATE transactions SET amount_satang=?,category_id=?,updated_at=? WHERE id=? AND source='manual' AND type='expense' AND deleted_at IS NULL",
+      "UPDATE transactions SET amount_satang=?,category_id=?,updated_at=? WHERE id=? AND profile_id=? AND source='manual' AND type='expense' AND deleted_at IS NULL",
       [
         amount.satang,
         category.first['id'],
         DateTime.now().toUtc().toIso8601String(),
         id,
+        repository.activeProfileId,
       ],
     );
   }
@@ -293,15 +367,19 @@ final class LocalFinanceStore {
   Future<void> softDeleteTransaction(String id) async {
     final now = DateTime.now().toUtc().toIso8601String();
     repository.execute(
-      "UPDATE transactions SET deleted_at=?,updated_at=? WHERE id=? AND source='manual' AND deleted_at IS NULL",
-      [now, now, id],
+      "UPDATE transactions SET deleted_at=?,updated_at=? WHERE id=? AND profile_id=? AND source='manual' AND deleted_at IS NULL",
+      [now, now, id, repository.activeProfileId],
     );
   }
 
   Future<void> restoreTransaction(String id) async {
     repository.execute(
-      "UPDATE transactions SET deleted_at=NULL,updated_at=? WHERE id=? AND source='manual' AND deleted_at IS NOT NULL",
-      [DateTime.now().toUtc().toIso8601String(), id],
+      "UPDATE transactions SET deleted_at=NULL,updated_at=? WHERE id=? AND profile_id=? AND source='manual' AND deleted_at IS NOT NULL",
+      [
+        DateTime.now().toUtc().toIso8601String(),
+        id,
+        repository.activeProfileId,
+      ],
     );
   }
 
@@ -313,13 +391,15 @@ final class LocalFinanceStore {
     required Money regular,
   }) async {
     final now = DateTime.now().toUtc().toIso8601String();
+    final installmentId = _scopedId(id);
+    final personalCategoryId = _scopedId('personal');
     repository.execute('BEGIN IMMEDIATE');
     try {
       repository.execute(
-        "INSERT OR REPLACE INTO installments(id,category_id,name,amount_satang,due_day,start_date,total_payable_satang,regular_payment_satang,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT OR REPLACE INTO installments(id,category_id,name,amount_satang,due_day,start_date,total_payable_satang,regular_payment_satang,status,created_at,updated_at,profile_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
         [
-          id,
-          'personal',
+          installmentId,
+          personalCategoryId,
           name,
           regular.satang,
           1,
@@ -329,20 +409,21 @@ final class LocalFinanceStore {
           'active',
           now,
           now,
+          repository.activeProfileId,
         ],
       );
       repository.execute(
         "DELETE FROM commitment_occurrences WHERE installment_id=?",
-        [id],
+        [installmentId],
       );
       if (paid.satang > 0) {
         final transactionId = _uuid.v4();
         repository.execute(
-          "INSERT INTO transactions(id,account_id,category_id,type,amount_satang,occurred_at,source,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+          "INSERT INTO transactions(id,account_id,category_id,type,amount_satang,occurred_at,source,note,created_at,updated_at,profile_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
           [
             transactionId,
             _accountId,
-            'personal',
+            personalCategoryId,
             'expense',
             paid.satang,
             now,
@@ -350,18 +431,20 @@ final class LocalFinanceStore {
             'ยอดชำระสะสมที่ผู้ใช้ยืนยัน',
             now,
             now,
+            repository.activeProfileId,
           ],
         );
         repository.execute(
-          "INSERT INTO commitment_occurrences(id,installment_id,due_date,planned_amount_satang,linked_transaction_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+          "INSERT INTO commitment_occurrences(id,installment_id,due_date,planned_amount_satang,linked_transaction_id,created_at,updated_at,profile_id) VALUES(?,?,?,?,?,?,?,?)",
           [
             _uuid.v4(),
-            id,
+            installmentId,
             now.split('T').first,
             paid.satang,
             transactionId,
             now,
             now,
+            repository.activeProfileId,
           ],
         );
       }
@@ -373,15 +456,16 @@ final class LocalFinanceStore {
   }
 
   Future<InstallmentProgress?> loadInstallmentProgress(String id) async {
+    final installmentId = _scopedId(id);
     final installments = repository.query(
-      'SELECT total_payable_satang,regular_payment_satang FROM installments WHERE id=? AND deleted_at IS NULL',
-      [id],
+      'SELECT total_payable_satang,regular_payment_satang FROM installments WHERE id=? AND profile_id=? AND deleted_at IS NULL',
+      [installmentId, repository.activeProfileId],
     );
     if (installments.isEmpty) return null;
     final row = installments.single;
     final payments = repository.query(
       "SELECT t.amount_satang,t.type FROM commitment_occurrences o JOIN transactions t ON t.id=o.linked_transaction_id WHERE o.installment_id=? AND o.deleted_at IS NULL AND t.deleted_at IS NULL",
-      [id],
+      [installmentId],
     );
     return FinancialRules.installmentProgress(
       totalPayable: row['total_payable_satang'] == null

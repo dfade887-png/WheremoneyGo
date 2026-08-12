@@ -8,7 +8,7 @@ import '../../domain/models/financial_models.dart';
 import '../../domain/bank_notification/bank_notification_adapter.dart';
 import '../../domain/repositories/finance_repository.dart';
 import '../local/migration_runner.dart';
-import '../local/schema_v3.dart';
+import '../local/schema_v4.dart';
 
 final class SqliteFinanceRepository implements FinanceRepository {
   SqliteFinanceRepository._(this.database);
@@ -30,6 +30,9 @@ final class SqliteFinanceRepository implements FinanceRepository {
   final Database database;
   static const _uuid = Uuid();
   static const _backupTables = <String>[
+    'financial_profiles',
+    'application_metadata',
+    'profile_settings',
     'accounts',
     'categories',
     'budget_periods',
@@ -77,20 +80,93 @@ final class SqliteFinanceRepository implements FinanceRepository {
               .first['count']
           as int;
 
+  String get activeProfileId =>
+      database
+              .select(
+                "SELECT value FROM application_metadata WHERE key='active_profile_id'",
+              )
+              .single['value']
+          as String;
+
+  Future<List<Map<String, Object?>>> profiles({
+    bool includeArchived = true,
+  }) async => query(
+    "SELECT p.*,(SELECT COUNT(*) FROM accounts a WHERE a.profile_id=p.id AND a.deleted_at IS NULL) account_count,(SELECT COUNT(*) FROM transactions t WHERE t.profile_id=p.id AND t.deleted_at IS NULL) transaction_count FROM financial_profiles p WHERE p.deleted_at IS NULL ${includeArchived ? '' : "AND p.status<>'archived'"} ORDER BY p.is_primary DESC,p.last_used_at DESC",
+  );
+
+  Future<String> createProfile(String name, {bool draft = true}) async {
+    final id = _uuid.v4();
+    final now = DateTime.now().toUtc().toIso8601String();
+    database.execute(
+      'INSERT INTO financial_profiles(id,name,status,last_used_at,created_at,updated_at) VALUES(?,?,?,?,?,?)',
+      [id, name.trim(), draft ? 'draft' : 'active', now, now, now],
+    );
+    return id;
+  }
+
+  Future<void> switchProfile(String id) async {
+    _atomic(() {
+      final rows = database.select(
+        "SELECT id FROM financial_profiles WHERE id=? AND status<>'archived' AND deleted_at IS NULL",
+        [id],
+      );
+      if (rows.isEmpty) throw StateError('Profile is unavailable');
+      final now = DateTime.now().toUtc().toIso8601String();
+      database.execute(
+        "UPDATE application_metadata SET value=?,updated_at=? WHERE key='active_profile_id'",
+        [id, now],
+      );
+      database.execute(
+        'UPDATE financial_profiles SET last_used_at=?,updated_at=? WHERE id=?',
+        [now, now, id],
+      );
+    });
+  }
+
+  Future<void> renameProfile(String id, String name) async => database.execute(
+    'UPDATE financial_profiles SET name=?,updated_at=? WHERE id=?',
+    [name.trim(), DateTime.now().toUtc().toIso8601String(), id],
+  );
+
+  Future<void> archiveProfile(String id) async {
+    if (id == activeProfileId) {
+      throw StateError('Switch profile before archiving');
+    }
+    database.execute(
+      "UPDATE financial_profiles SET status='archived',updated_at=? WHERE id=?",
+      [DateTime.now().toUtc().toIso8601String(), id],
+    );
+  }
+
+  Future<void> restoreProfile(String id) async => database.execute(
+    "UPDATE financial_profiles SET status='active',updated_at=? WHERE id=?",
+    [DateTime.now().toUtc().toIso8601String(), id],
+  );
+
+  Future<void> setPrimaryProfile(String id) async {
+    _atomic(() {
+      database.execute('UPDATE financial_profiles SET is_primary=0');
+      database.execute(
+        'UPDATE financial_profiles SET is_primary=1,updated_at=? WHERE id=?',
+        [DateTime.now().toUtc().toIso8601String(), id],
+      );
+    });
+  }
+
   Future<String> stageBankEvent(
     ParsedBankEvent event, {
     required String sourcePackage,
     required DateTime detectedAt,
   }) async {
     final existing = database.select(
-      'SELECT id FROM bank_notification_events WHERE notification_key_hash=? OR content_fingerprint=? LIMIT 1',
-      [event.notificationKeyHash, event.contentFingerprint],
+      'SELECT id FROM bank_notification_events WHERE profile_id=? AND (notification_key_hash=? OR content_fingerprint=?) LIMIT 1',
+      [activeProfileId, event.notificationKeyHash, event.contentFingerprint],
     );
     if (existing.isNotEmpty) return existing.first['id'] as String;
     final id = _uuid.v4();
     final now = DateTime.now().toUtc().toIso8601String();
     database.execute(
-      'INSERT INTO bank_notification_events(id,source_package,institution,adapter_version,notification_key_hash,content_fingerprint,detected_at,posted_at,direction,amount_satang,account_hint_masked,merchant_hint,status,parse_error_code,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      'INSERT INTO bank_notification_events(id,source_package,institution,adapter_version,notification_key_hash,content_fingerprint,detected_at,posted_at,direction,amount_satang,account_hint_masked,merchant_hint,status,parse_error_code,created_at,updated_at,profile_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
       [
         id,
         sourcePackage,
@@ -108,6 +184,7 @@ final class SqliteFinanceRepository implements FinanceRepository {
         event.errorCode,
         now,
         now,
+        activeProfileId,
       ],
     );
     return id;
@@ -213,6 +290,15 @@ final class SqliteFinanceRepository implements FinanceRepository {
     if (fromAccountId == toAccountId) {
       throw ArgumentError('Transfer accounts must be different');
     }
+    final owned =
+        database.select(
+              'SELECT COUNT(*) count FROM accounts WHERE profile_id=? AND id IN (?,?) AND deleted_at IS NULL',
+              [activeProfileId, fromAccountId, toAccountId],
+            ).single['count']
+            as int;
+    if (owned != 2) {
+      throw StateError('Transfer accounts must belong to active profile');
+    }
     final group = _uuid.v4();
     _atomic(() {
       _insertTransaction(
@@ -281,7 +367,7 @@ final class SqliteFinanceRepository implements FinanceRepository {
     final importId = _uuid.v4();
     _atomic(() {
       database.execute(
-        'INSERT INTO statement_imports(id, account_id, institution, adapter_version, file_name, file_hash, opening_balance_satang, closing_balance_satang, status, imported_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+        'INSERT INTO statement_imports(id, account_id, institution, adapter_version, file_name, file_hash, opening_balance_satang, closing_balance_satang, status, imported_at, profile_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
         [
           importId,
           accountId,
@@ -293,6 +379,7 @@ final class SqliteFinanceRepository implements FinanceRepository {
           parsed.closingBalance?.satang,
           'preview',
           DateTime.now().toUtc().toIso8601String(),
+          activeProfileId,
         ],
       );
       for (final row in [
@@ -310,7 +397,7 @@ final class SqliteFinanceRepository implements FinanceRepository {
             )
             .toString();
         database.execute(
-          'INSERT INTO statement_rows(id, statement_import_id, row_index, posted_date, transaction_date, description_raw, reference_no, direction, amount_satang, running_balance_satang, row_fingerprint) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+          'INSERT INTO statement_rows(id, statement_import_id, row_index, posted_date, transaction_date, description_raw, reference_no, direction, amount_satang, running_balance_satang, row_fingerprint, profile_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
           [
             _uuid.v4(),
             importId,
@@ -323,6 +410,7 @@ final class SqliteFinanceRepository implements FinanceRepository {
             row.amount.satang,
             row.runningBalance?.satang,
             fingerprint,
+            activeProfileId,
           ],
         );
       }
@@ -493,7 +581,9 @@ final class SqliteFinanceRepository implements FinanceRepository {
   @override
   Future<List<Map<String, Object?>>> dumpTable(String table) async {
     if (!_backupTables.contains(table)) throw ArgumentError.value(table);
-    return query('SELECT * FROM $table ORDER BY id');
+    return query(
+      'SELECT * FROM $table ORDER BY ${table == 'application_metadata' ? 'key' : 'id'}',
+    );
   }
 
   @override
@@ -503,11 +593,11 @@ final class SqliteFinanceRepository implements FinanceRepository {
       data[table] = await dumpTable(table);
     }
     final payload = jsonEncode({
-      'schemaVersion': SchemaV3.version,
+      'schemaVersion': SchemaV4.version,
       'data': data,
     });
     return {
-      'schemaVersion': SchemaV3.version,
+      'schemaVersion': SchemaV4.version,
       'data': data,
       'checksum': sha256.convert(utf8.encode(payload)).toString(),
     };
@@ -519,17 +609,31 @@ final class SqliteFinanceRepository implements FinanceRepository {
     final data = backup['data'];
     final checksum = backup['checksum'];
     final payload = jsonEncode({'schemaVersion': schemaVersion, 'data': data});
-    if ((schemaVersion != 2 && schemaVersion != SchemaV3.version) ||
+    if ((schemaVersion != 2 &&
+            schemaVersion != 3 &&
+            schemaVersion != SchemaV4.version) ||
         checksum != sha256.convert(utf8.encode(payload)).toString() ||
         data is! Map) {
       throw const FormatException('Invalid or unsupported backup');
     }
     _atomic(() {
-      for (final table in _backupTables.reversed) {
+      final legacyBackup = schemaVersion != SchemaV4.version;
+      final tables = legacyBackup
+          ? _backupTables
+                .where(
+                  (table) => !const {
+                    'financial_profiles',
+                    'application_metadata',
+                    'profile_settings',
+                  }.contains(table),
+                )
+                .toList()
+          : _backupTables;
+      for (final table in tables.reversed) {
         database.execute('DELETE FROM $table');
       }
       final typed = Map<String, Object?>.from(data);
-      for (final table in _backupTables) {
+      for (final table in tables) {
         for (final raw in (typed[table] as List? ?? const [])) {
           final row = Map<String, Object?>.from(raw as Map);
           final columns = row.keys.toList();
@@ -557,10 +661,13 @@ final class SqliteFinanceRepository implements FinanceRepository {
     final now = DateTime.now().toUtc().toIso8601String();
     _atomic(() {
       if (salaryAccount) {
-        database.execute('UPDATE accounts SET is_salary_account=0');
+        database.execute(
+          'UPDATE accounts SET is_salary_account=0 WHERE profile_id=?',
+          [activeProfileId],
+        );
       }
       database.execute(
-        'INSERT INTO accounts(id,name,opening_balance_satang,is_active,include_in_net_worth,account_type,icon_key,color_value,is_salary_account,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+        'INSERT INTO accounts(id,name,opening_balance_satang,is_active,include_in_net_worth,account_type,icon_key,color_value,is_salary_account,created_at,updated_at,profile_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
         [
           id,
           name.trim(),
@@ -573,6 +680,7 @@ final class SqliteFinanceRepository implements FinanceRepository {
           salaryAccount ? 1 : 0,
           now,
           now,
+          activeProfileId,
         ],
       );
       _audit('account', id, 'create');
@@ -590,8 +698,14 @@ final class SqliteFinanceRepository implements FinanceRepository {
     }
     _atomic(() {
       database.execute(
-        'UPDATE accounts SET name=?,account_type=?,updated_at=? WHERE id=? AND deleted_at IS NULL',
-        [name.trim(), type, DateTime.now().toUtc().toIso8601String(), id],
+        'UPDATE accounts SET name=?,account_type=?,updated_at=? WHERE id=? AND profile_id=? AND deleted_at IS NULL',
+        [
+          name.trim(),
+          type,
+          DateTime.now().toUtc().toIso8601String(),
+          id,
+          activeProfileId,
+        ],
       );
       if (database.updatedRows != 1) throw StateError('Account not found');
       _audit('account', id, 'update');
@@ -602,8 +716,8 @@ final class SqliteFinanceRepository implements FinanceRepository {
     _atomic(() {
       final active =
           database.select(
-                "SELECT COUNT(*) count FROM accounts WHERE is_active=1 AND archived_at IS NULL AND deleted_at IS NULL AND id<>?",
-                [id],
+                "SELECT COUNT(*) count FROM accounts WHERE profile_id=? AND is_active=1 AND archived_at IS NULL AND deleted_at IS NULL AND id<>?",
+                [activeProfileId, id],
               ).first['count']
               as int;
       if (active < 1) {
@@ -611,8 +725,8 @@ final class SqliteFinanceRepository implements FinanceRepository {
       }
       final now = DateTime.now().toUtc().toIso8601String();
       database.execute(
-        'UPDATE accounts SET is_active=0,archived_at=?,updated_at=? WHERE id=?',
-        [now, now, id],
+        'UPDATE accounts SET is_active=0,archived_at=?,updated_at=? WHERE id=? AND profile_id=?',
+        [now, now, id, activeProfileId],
       );
       _audit('account', id, 'archive');
     });
@@ -621,8 +735,8 @@ final class SqliteFinanceRepository implements FinanceRepository {
   Future<void> restoreAccount(String id) async {
     _atomic(() {
       database.execute(
-        'UPDATE accounts SET is_active=1,archived_at=NULL,updated_at=? WHERE id=?',
-        [DateTime.now().toUtc().toIso8601String(), id],
+        'UPDATE accounts SET is_active=1,archived_at=NULL,updated_at=? WHERE id=? AND profile_id=?',
+        [DateTime.now().toUtc().toIso8601String(), id, activeProfileId],
       );
       _audit('account', id, 'restore');
     });
@@ -631,7 +745,8 @@ final class SqliteFinanceRepository implements FinanceRepository {
   Future<List<Map<String, Object?>>> accounts({
     bool includeArchived = true,
   }) async => query(
-    '''SELECT a.*, a.opening_balance_satang + COALESCE(SUM(CASE WHEN t.deleted_at IS NOT NULL THEN 0 WHEN t.type IN ('income','refund','transfer_in') THEN t.amount_satang WHEN t.type IN ('expense','transfer_out') THEN -t.amount_satang WHEN t.type='balance_adjustment' THEN t.amount_satang ELSE 0 END),0) AS balance_satang FROM accounts a LEFT JOIN transactions t ON t.account_id=a.id WHERE a.deleted_at IS NULL ${includeArchived ? '' : 'AND a.is_active=1 AND a.archived_at IS NULL'} GROUP BY a.id ORDER BY a.created_at''',
+    '''SELECT a.*, a.opening_balance_satang + COALESCE(SUM(CASE WHEN t.deleted_at IS NOT NULL THEN 0 WHEN t.type IN ('income','refund','transfer_in') THEN t.amount_satang WHEN t.type IN ('expense','transfer_out') THEN -t.amount_satang WHEN t.type='balance_adjustment' THEN t.amount_satang ELSE 0 END),0) AS balance_satang FROM accounts a LEFT JOIN transactions t ON t.account_id=a.id AND t.profile_id=a.profile_id WHERE a.profile_id=? AND a.deleted_at IS NULL ${includeArchived ? '' : 'AND a.is_active=1 AND a.archived_at IS NULL'} GROUP BY a.id ORDER BY a.created_at''',
+    [activeProfileId],
   );
 
   Future<String> adjustBalance({
@@ -669,8 +784,18 @@ final class SqliteFinanceRepository implements FinanceRepository {
     final now = DateTime.now().toUtc().toIso8601String();
     _atomic(() {
       database.execute(
-        'INSERT INTO categories(id,name,is_essential,category_type,icon_key,color_value,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
-        [id, name.trim(), 0, type, iconKey, colorValue, now, now],
+        'INSERT INTO categories(id,name,is_essential,category_type,icon_key,color_value,created_at,updated_at,profile_id) VALUES(?,?,?,?,?,?,?,?,?)',
+        [
+          id,
+          name.trim(),
+          0,
+          type,
+          iconKey,
+          colorValue,
+          now,
+          now,
+          activeProfileId,
+        ],
       );
       _audit('category', id, 'create');
     });
@@ -724,8 +849,8 @@ final class SqliteFinanceRepository implements FinanceRepository {
     String? type,
     bool activeOnly = true,
   }) async => query(
-    'SELECT * FROM categories WHERE deleted_at IS NULL ${activeOnly ? 'AND archived_at IS NULL' : ''} ${type == null ? '' : 'AND category_type=?'} ORDER BY sort_order,name',
-    type == null ? const [] : [type],
+    'SELECT * FROM categories WHERE profile_id=? AND deleted_at IS NULL ${activeOnly ? 'AND archived_at IS NULL' : ''} ${type == null ? '' : 'AND category_type=?'} ORDER BY sort_order,name',
+    type == null ? [activeProfileId] : [activeProfileId, type],
   );
 
   Future<String> createTransaction({
@@ -742,8 +867,8 @@ final class SqliteFinanceRepository implements FinanceRepository {
       throw ArgumentError('Invalid transaction');
     }
     final category = database.select(
-      'SELECT category_type FROM categories WHERE id=? AND archived_at IS NULL',
-      [categoryId],
+      'SELECT category_type FROM categories WHERE id=? AND profile_id=? AND archived_at IS NULL',
+      [categoryId, activeProfileId],
     );
     if (category.isEmpty) throw StateError('Category unavailable');
     final expected = type == 'income' ? 'income' : 'expense';
@@ -770,7 +895,8 @@ final class SqliteFinanceRepository implements FinanceRepository {
   Future<List<Map<String, Object?>>> activity({
     bool includeDeleted = false,
   }) async => query(
-    '''SELECT t.*,a.name account_name,c.name category_name,c.icon_key,c.color_value FROM transactions t JOIN accounts a ON a.id=t.account_id LEFT JOIN categories c ON c.id=t.category_id WHERE ${includeDeleted ? '1=1' : 't.deleted_at IS NULL'} ORDER BY t.occurred_at DESC,t.created_at DESC''',
+    '''SELECT t.*,a.name account_name,c.name category_name,c.icon_key,c.color_value FROM transactions t JOIN accounts a ON a.id=t.account_id LEFT JOIN categories c ON c.id=t.category_id WHERE t.profile_id=? AND ${includeDeleted ? '1=1' : 't.deleted_at IS NULL'} ORDER BY t.occurred_at DESC,t.created_at DESC''',
+    [activeProfileId],
   );
 
   Future<void> softDeleteTransaction(String id) async {
@@ -836,8 +962,8 @@ final class SqliteFinanceRepository implements FinanceRepository {
       }
       final expected = rows.single['type'] == 'income' ? 'income' : 'expense';
       final category = database.select(
-        'SELECT category_type FROM categories WHERE id=? AND archived_at IS NULL',
-        [categoryId],
+        'SELECT category_type FROM categories WHERE id=? AND profile_id=? AND archived_at IS NULL',
+        [categoryId, activeProfileId],
       );
       if (category.isEmpty || category.single['category_type'] != expected) {
         throw StateError('Category type mismatch');
@@ -906,7 +1032,7 @@ final class SqliteFinanceRepository implements FinanceRepository {
     final id = _uuid.v4();
     final now = DateTime.now().toUtc().toIso8601String();
     database.execute(
-      'INSERT INTO commitments(id,category_id,default_account_id,name,commitment_type,total_payable_satang,regular_payment_satang,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+      'INSERT INTO commitments(id,category_id,default_account_id,name,commitment_type,total_payable_satang,regular_payment_satang,status,created_at,updated_at,profile_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
       [
         id,
         categoryId,
@@ -918,6 +1044,7 @@ final class SqliteFinanceRepository implements FinanceRepository {
         'active',
         now,
         now,
+        activeProfileId,
       ],
     );
     _audit('commitment', id, 'create');
@@ -941,8 +1068,8 @@ final class SqliteFinanceRepository implements FinanceRepository {
       );
       final now = DateTime.now().toUtc().toIso8601String();
       database.execute(
-        'INSERT INTO commitment_payments(id,commitment_id,transaction_id,created_at,updated_at) VALUES(?,?,?,?,?)',
-        [_uuid.v4(), commitmentId, transactionId, now, now],
+        'INSERT INTO commitment_payments(id,commitment_id,transaction_id,created_at,updated_at,profile_id) VALUES(?,?,?,?,?,?)',
+        [_uuid.v4(), commitmentId, transactionId, now, now, activeProfileId],
       );
       _audit('transaction', transactionId, 'create');
     });
@@ -957,7 +1084,8 @@ final class SqliteFinanceRepository implements FinanceRepository {
           as int;
 
   Future<List<Map<String, Object?>>> commitments() async => query(
-    '''SELECT c.*,COALESCE(SUM(CASE WHEN t.deleted_at IS NULL AND t.type='expense' THEN t.amount_satang WHEN t.deleted_at IS NULL AND t.type='refund' THEN -t.amount_satang ELSE 0 END),0) AS paid_satang FROM commitments c LEFT JOIN commitment_payments p ON p.commitment_id=c.id AND p.deleted_at IS NULL LEFT JOIN transactions t ON t.id=p.transaction_id WHERE c.deleted_at IS NULL AND c.status<>'archived' GROUP BY c.id ORDER BY c.created_at DESC''',
+    '''SELECT c.*,COALESCE(SUM(CASE WHEN t.deleted_at IS NULL AND t.type='expense' THEN t.amount_satang WHEN t.deleted_at IS NULL AND t.type='refund' THEN -t.amount_satang ELSE 0 END),0) AS paid_satang FROM commitments c LEFT JOIN commitment_payments p ON p.commitment_id=c.id AND p.deleted_at IS NULL LEFT JOIN transactions t ON t.id=p.transaction_id WHERE c.profile_id=? AND c.deleted_at IS NULL AND c.status<>'archived' GROUP BY c.id ORDER BY c.created_at DESC''',
+    [activeProfileId],
   );
 
   Future<void> updateCommitmentTarget(String id, int? targetSatang) async {
@@ -972,8 +1100,30 @@ final class SqliteFinanceRepository implements FinanceRepository {
 
   Future<void> resetUserData({bool failMidway = false}) async {
     _atomic(() {
-      for (final table in _backupTables.reversed) {
-        database.execute('DELETE FROM $table');
+      const scoped = <String>[
+        'statement_rows',
+        'statement_imports',
+        'bank_notification_events',
+        'commitment_payments',
+        'commitments',
+        'installment_total_adjustments',
+        'commitment_occurrences',
+        'transactions',
+        'period_budgets',
+        'budget_periods',
+        'payroll_deductions',
+        'salary_profiles',
+        'saving_goals',
+        'recurring_expenses',
+        'installments',
+        'categories',
+        'accounts',
+        'profile_settings',
+        'audit_events',
+      ];
+      final profile = activeProfileId;
+      for (final table in scoped) {
+        database.execute('DELETE FROM $table WHERE profile_id=?', [profile]);
         if (failMidway && table == 'transactions') {
           throw StateError('Injected reset failure');
         }
@@ -996,7 +1146,7 @@ final class SqliteFinanceRepository implements FinanceRepository {
     final id = _uuid.v4();
     final now = DateTime.now().toUtc().toIso8601String();
     database.execute(
-      'INSERT INTO transactions(id, account_id, category_id, type, amount_satang, occurred_at, transfer_group_id, refund_of_transaction_id, source, note, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+      'INSERT INTO transactions(id, account_id, category_id, type, amount_satang, occurred_at, transfer_group_id, refund_of_transaction_id, source, note, created_at, updated_at,profile_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
       [
         id,
         accountId,
@@ -1010,6 +1160,7 @@ final class SqliteFinanceRepository implements FinanceRepository {
         note,
         now,
         now,
+        activeProfileId,
       ],
     );
     return id;
@@ -1023,7 +1174,7 @@ final class SqliteFinanceRepository implements FinanceRepository {
   }) {
     final now = DateTime.now().toUtc().toIso8601String();
     database.execute(
-      'INSERT INTO audit_events(id,entity_type,entity_id,action,occurred_at,metadata_json,created_at) VALUES(?,?,?,?,?,?,?)',
+      'INSERT INTO audit_events(id,entity_type,entity_id,action,occurred_at,metadata_json,created_at,profile_id) VALUES(?,?,?,?,?,?,?,?)',
       [
         _uuid.v4(),
         entityType,
@@ -1032,6 +1183,7 @@ final class SqliteFinanceRepository implements FinanceRepository {
         now,
         metadata == null ? null : jsonEncode(metadata),
         now,
+        activeProfileId,
       ],
     );
   }

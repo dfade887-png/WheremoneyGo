@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart';
 import '../core/money.dart';
-import '../domain/financial_rules.dart';
 import '../domain/models/financial_models.dart';
+import '../domain/financial_snapshot.dart' as projection;
 import 'local_finance_store.dart';
 
 enum AppStep { welcome, payday, accounts, recurring, saving, dashboard }
@@ -39,6 +39,9 @@ final class AppState extends ChangeNotifier {
   List<Map<String, Object?>> categories = const [];
   List<Map<String, Object?>> activities = const [];
   List<Map<String, Object?>> commitments = const [];
+  List<Map<String, Object?>> profiles = const [];
+  String? activeProfileId;
+  projection.FinancialSnapshot? projectionSnapshot;
 
   Future<void> initialize() async {
     viewStatus = ViewStatus.loading;
@@ -83,33 +86,66 @@ final class AppState extends ChangeNotifier {
   }
 
   FinanceSnapshot get snapshot {
-    final currentCash = Money.fromSatang(
-      accounts
-          .where((a) => a['is_active'] == 1 && a['include_in_net_worth'] == 1)
-          .fold<int>(0, (sum, a) => sum + ((a['balance_satang'] as int?) ?? 0)),
-    );
-    final flexible = FinancialRules.remainingFlexible(
-      Money.fromBaht(5626),
-      Money.zero,
-    );
+    final calculated = projectionSnapshot;
+    final currentCash = calculated?.actualMoney ?? Money.zero;
     return FinanceSnapshot(
       currentCash: currentCash,
-      dailyAllowance: FinancialRules.dailyAllowance(flexible, 30),
-      forecast: FinancialRules.forecast(
-        currentCash: Money.fromBaht(17125),
-        expectedIncomeNotReceived: Money.zero,
-        unpaidCommitments: Money.fromBaht(5999),
-        remainingVariableSpend: Money.fromBaht(8626),
-      ),
-      foodSpent: foodSpent,
+      dailyAllowance: calculated?.todayAvailableSafe ?? Money.zero,
+      forecast: calculated?.forecastEndOfCycle ?? Money.zero,
+      foodSpent:
+          calculated?.categoryBudgets
+              .where((b) => b.name == 'อาหาร')
+              .firstOrNull
+              ?.spentNet ??
+          Money.zero,
     );
   }
 
   Future<void> refreshDailyData() async {
+    profiles = await _store!.profiles();
+    activeProfileId = _store!.activeProfileId;
     accounts = await _store!.accounts();
     categories = await _store!.categories();
     activities = await _store!.activity();
     commitments = await _store!.commitments();
+    final inputs = await _store!.projectionInputs();
+    projectionSnapshot = projection.FinancialSnapshotCalculator.calculate(
+      profileId: activeProfileId!,
+      now: DateTime.now(),
+      payday: payday,
+      activeAccountBalancesSatang: accounts
+          .where((a) => a['is_active'] == 1 && a['include_in_net_worth'] == 1)
+          .map((a) => a['balance_satang'] as int),
+      transactions: activities,
+      categoryBudgets: inputs['categoryBudgets'] as List<Map<String, Object?>>,
+      expectedIncomeRemainingSatang:
+          inputs['expectedIncomeRemainingSatang'] as int,
+      unpaidObligationsSatang: inputs['unpaidObligationsSatang'] as int,
+      plannedFlexibleSpendSatang: inputs['plannedFlexibleSpendSatang'] as int,
+      savingReservationSatang: inputs['savingReservationSatang'] as int,
+      minimumReserveSatang: inputs['minimumReserveSatang'] as int,
+      savingGoalSatang: inputs['savingGoalSatang'] as int,
+    );
+    notifyListeners();
+  }
+
+  Future<void> createAndSwitchProfile(String name) async {
+    final id = await _store!.createProfile(name);
+    await _store!.switchProfile(id);
+    activeProfileId = id;
+    payday = 25;
+    accountName = '';
+    openingBalance = Money.zero;
+    foodSpent = Money.zero;
+    savingTarget = Money.zero;
+    emergencyTarget = Money.zero;
+    step = AppStep.payday;
+    await refreshDailyData();
+  }
+
+  Future<void> switchFinancialProfile(String id) async {
+    await _store!.switchProfile(id);
+    await refreshDailyData();
     notifyListeners();
   }
 

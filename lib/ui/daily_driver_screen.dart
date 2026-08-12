@@ -262,6 +262,17 @@ class _DataTab extends StatelessWidget {
       ),
       const SizedBox(height: 16),
       OutlinedButton.icon(
+        icon: const Icon(Icons.save_outlined),
+        label: const Text('โปรไฟล์การเงิน'),
+        onPressed: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => FinancialProfilesScreen(state: state),
+          ),
+        ),
+      ),
+      const SizedBox(height: 8),
+      OutlinedButton.icon(
         icon: const Icon(Icons.flag_outlined),
         label: const Text('ภาระและเป้าหมายค่าใช้จ่าย'),
         onPressed: () => Navigator.push(
@@ -289,6 +300,155 @@ class _DataTab extends StatelessWidget {
         onPressed: () => _resetFlow(context, state),
       ),
     ],
+  );
+}
+
+class FinancialProfilesScreen extends StatelessWidget {
+  const FinancialProfilesScreen({required this.state, super.key});
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: state,
+    builder: (context, _) => Scaffold(
+      appBar: AppBar(title: const Text('โปรไฟล์การเงิน')),
+      body: RefreshIndicator(
+        onRefresh: state.refreshDailyData,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            const Text(
+              'เหมือน Save Slot ในเกม • เปิดใช้งานทีละโปรไฟล์',
+              style: TextStyle(color: AppColors.muted),
+            ),
+            const SizedBox(height: 12),
+            for (final profile in state.profiles)
+              Card(
+                color: profile['id'] == state.activeProfileId
+                    ? AppColors.mintSoft
+                    : null,
+                child: ListTile(
+                  minTileHeight: 78,
+                  leading: Icon(
+                    profile['id'] == state.activeProfileId
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_off,
+                  ),
+                  title: Text(profile['name'] as String),
+                  subtitle: Text(
+                    '${profile['account_count']} บัญชี • ${profile['transaction_count']} รายการ\n${profile['status']}',
+                  ),
+                  isThreeLine: true,
+                  trailing: profile['id'] == state.activeProfileId
+                      ? const Chip(label: Text('กำลังใช้'))
+                      : const Icon(Icons.chevron_right),
+                  onTap:
+                      profile['status'] == 'archived' ||
+                          profile['id'] == state.activeProfileId
+                      ? null
+                      : () async {
+                          final confirmed =
+                              await showDialog<bool>(
+                                context: context,
+                                builder: (context) => AlertDialog(
+                                  title: const Text('สลับโปรไฟล์?'),
+                                  content: Text(
+                                    'Dashboard และรายการทั้งหมดจะเปลี่ยนเป็น “${profile['name']}”',
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () =>
+                                          Navigator.pop(context, false),
+                                      child: const Text('ยกเลิก'),
+                                    ),
+                                    FilledButton(
+                                      onPressed: () =>
+                                          Navigator.pop(context, true),
+                                      child: const Text('สลับ'),
+                                    ),
+                                  ],
+                                ),
+                              ) ??
+                              false;
+                          if (confirmed) {
+                            await state.switchFinancialProfile(
+                              profile['id'] as String,
+                            );
+                          }
+                        },
+                ),
+              ),
+          ],
+        ),
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        icon: const Icon(Icons.add),
+        label: const Text('สร้างโปรไฟล์ใหม่'),
+        onPressed: () async {
+          final name = TextEditingController();
+          final created = await showModalBottomSheet<String>(
+            context: context,
+            isScrollControlled: true,
+            useSafeArea: true,
+            builder: (context) => Padding(
+              padding: EdgeInsets.fromLTRB(
+                20,
+                20,
+                20,
+                MediaQuery.viewInsetsOf(context).bottom + 20,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'สร้าง Save ใหม่',
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.pop(context),
+                        icon: const Icon(Icons.close),
+                      ),
+                    ],
+                  ),
+                  TextField(
+                    controller: name,
+                    autofocus: true,
+                    decoration: const InputDecoration(
+                      labelText: 'ชื่อโปรไฟล์ *',
+                      hintText: 'ใช้งานจริง — สิงหาคม 2569',
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  FilledButton(
+                    onPressed: () {
+                      if (name.text.trim().isNotEmpty) {
+                        Navigator.pop(context, name.text.trim());
+                      }
+                    },
+                    child: const Text('สร้างและเริ่ม Onboarding'),
+                  ),
+                ],
+              ),
+            ),
+          );
+          name.dispose();
+          if (created != null) {
+            await state.createAndSwitchProfile(created);
+            if (context.mounted) {
+              Navigator.popUntil(context, (route) => route.isFirst);
+            }
+          }
+        },
+      ),
+    ),
   );
 }
 

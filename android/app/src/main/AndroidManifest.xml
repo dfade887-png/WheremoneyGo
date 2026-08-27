@@ -1,5 +1,4 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application
         android:label="ngoen_ku_pai_nai"
         android:name="${applicationName}"
@@ -32,8 +31,8 @@
             android:name="flutterEmbedding"
             android:value="2" />
         <service
-            android:name=".BankNotificationListenerService"
-            android:label="Bank notification detection (Experimental)"
+            android:name=".GenericNotificationListenerService"
+            android:label="ตรวจจับรายการจากการแจ้งเตือน"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
             android:exported="true">
             <intent-filter>

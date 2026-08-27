@@ -2,9 +2,18 @@ import 'package:flutter/foundation.dart';
 import '../core/money.dart';
 import '../domain/models/financial_models.dart';
 import '../domain/financial_snapshot.dart' as projection;
+import '../data/repositories/sqlite_finance_repository.dart';
 import 'local_finance_store.dart';
 
-enum AppStep { welcome, payday, accounts, recurring, saving, dashboard }
+enum AppStep {
+  welcome,
+  payday,
+  accounts,
+  recurring,
+  saving,
+  dashboard,
+  calendar,
+}
 
 enum ViewStatus { ready, loading, empty, error }
 
@@ -46,6 +55,12 @@ final class AppState extends ChangeNotifier {
   String? activeProfileId;
   projection.FinancialSnapshot? projectionSnapshot;
   bool onboardingSubmitting = false;
+
+  SqliteFinanceRepository get financeRepository {
+    final store = _store;
+    if (store == null) throw StateError('AppState is not initialized');
+    return store.repository;
+  }
 
   Future<void> initialize() async {
     viewStatus = ViewStatus.loading;

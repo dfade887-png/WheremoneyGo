@@ -1,10 +1,70 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/services.dart';
+import 'package:ngoen_ku_pai_nai/data/notification_capture_bridge.dart';
 import 'package:ngoen_ku_pai_nai/ui/finance_app.dart';
 import 'package:ngoen_ku_pai_nai/ui/app_state.dart';
 import 'package:ngoen_ku_pai_nai/ui/local_finance_store.dart';
+import 'package:ngoen_ku_pai_nai/ui/candidate_inbox_screen.dart';
+import 'package:ngoen_ku_pai_nai/ui/finance_components.dart';
+import 'package:ngoen_ku_pai_nai/ui/notification_capture_screen.dart';
 
 void main() {
+  test('money display keeps satang precision and separators', () {
+    expect(FinanceMoneyFormat.satang(123456789), '฿1,234,567.89');
+    expect(FinanceMoneyFormat.satang(-150000), '-฿1,500.00');
+    expect(FinanceMoneyFormat.satang(1712500, signed: true), '+฿17,125.00');
+  });
+
+  testWidgets('candidate inbox is a safe empty shell', (tester) async {
+    await tester.pumpWidget(const MaterialApp(home: CandidateInboxScreen()));
+    expect(find.text('รายการรอตรวจ'), findsOneWidget);
+    expect(find.byKey(const Key('candidate-inbox-empty')), findsOneWidget);
+    expect(find.textContaining('ต้องให้คุณตรวจสอบ'), findsOneWidget);
+  });
+
+  testWidgets(
+    'notification settings shows permission and LINE without package',
+    (tester) async {
+      const channel = MethodChannel('test/notification_capture');
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        channel,
+        (call) async => switch (call.method) {
+          'hasNotificationAccess' => true,
+          'readCapturedNotifications' => <Object?>[],
+          _ => null,
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          null,
+        ),
+      );
+      final store = LocalFinanceStore.memory();
+      await store.repository.createNotificationSource(
+        sourceKind: 'line',
+        displayName: 'LINE',
+        packageName: 'jp.naver.line.android',
+      );
+      final state = AppState(store: store);
+      await state.initialize();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: NotificationCaptureScreen(
+            state: state,
+            bridge: NotificationCaptureBridge(channel: channel),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('สิทธิ์การแจ้งเตือน'), findsOneWidget);
+      expect(find.text('เปิดแล้ว'), findsOneWidget);
+      expect(find.text('LINE'), findsOneWidget);
+      expect(find.text('jp.naver.line.android'), findsNothing);
+    },
+  );
   testWidgets('onboarding reaches dashboard', (tester) async {
     await tester.pumpWidget(
       FinanceApp(state: AppState(store: LocalFinanceStore.memory())),
@@ -20,6 +80,8 @@ void main() {
     }
     expect(find.text('วันนี้ยังรอด'), findsOneWidget);
     expect(find.text('LOCAL DATA • ข้อมูลจริง'), findsOneWidget);
+    expect(find.text('เงินจริงตอนนี้'), findsOneWidget);
+    expect(find.text('คาดการณ์สิ้นรอบ'), findsOneWidget);
   });
   testWidgets('quick add requires amount and category', (tester) async {
     await tester.pumpWidget(
@@ -37,7 +99,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('อาหาร'));
     await tester.pumpAndSettle();
-    expect(find.text('บันทึก ฿120'), findsOneWidget);
+    expect(find.text('บันทึก ฿120.00'), findsOneWidget);
   });
   testWidgets('statement confirm is blocked while pending', (tester) async {
     await tester.pumpWidget(const MaterialApp(home: StatementPreviewScreen()));

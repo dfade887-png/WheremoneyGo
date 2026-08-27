@@ -6,6 +6,8 @@ import '../domain/payday_calendar.dart';
 import 'app_state.dart';
 import 'theme/app_theme.dart';
 import 'daily_driver_screen.dart';
+import 'financial_calendar_screen.dart';
+import 'finance_components.dart';
 import 'local_finance_store.dart';
 
 class FinanceApp extends StatefulWidget {
@@ -58,6 +60,7 @@ class _AppRouter extends StatelessWidget {
       AppStep.recurring => RecurringScreen(state: state),
       AppStep.saving => SavingScreen(state: state),
       AppStep.dashboard => DashboardScreen(state: state),
+      AppStep.calendar => FinancialCalendarScreen(state: state),
     };
   }
 }
@@ -697,9 +700,13 @@ class DashboardScreen extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const _DataPill(),
+                      const Expanded(
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: _DataPill(),
+                        ),
+                      ),
                       IconButton(
                         onPressed: () => Navigator.push(
                           context,
@@ -720,30 +727,36 @@ class DashboardScreen extends StatelessWidget {
                     'เงินหายไปไหน เดี๋ยวหาให้',
                     style: TextStyle(color: Color(0xFFAAB8BD)),
                   ),
-                  const Text(
-                    'วันนี้ยังรอด',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 40,
-                      height: 1,
-                      fontWeight: FontWeight.w700,
+                  const FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'วันนี้ยังรอด',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 40,
+                        height: 1,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                   const SizedBox(height: 28),
                   const Text(
-                    'เงินจริงรวม',
+                    'เงินจริงตอนนี้',
                     style: TextStyle(color: Color(0xFFAAB8BD)),
                   ),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
-                      Text(
-                        _money(data.currentCash),
-                        style: const TextStyle(
+                      Expanded(
+                        child: FinanceAmountText(
+                          satang: data.currentCash.satang,
                           color: Colors.white,
-                          fontSize: 34,
-                          fontWeight: FontWeight.w700,
+                          style: const TextStyle(
+                            fontSize: 34,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
                       TextButton(
@@ -768,38 +781,47 @@ class DashboardScreen extends StatelessWidget {
               padding: const EdgeInsets.all(16),
               child: Column(
                 children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _MetricCard(
-                          label: 'วันนี้ใช้ได้',
-                          value: _money(data.dailyAllowance),
-                          note:
-                              'งบคงเหลือ ÷ ${projection?.daysRemaining ?? 1} วัน',
-                          tone: AppColors.mintSoft,
-                          onTap: () => _breakdown(context, 'งบใช้ได้วันนี้', [
-                            'งบยืดหยุ่นคงเหลือ ${_money(projection?.flexibleMoneyRemaining ?? Money.zero)}',
-                            '÷ ${projection?.daysRemaining ?? 1} วันที่เหลือ',
-                            '= ${_money(data.dailyAllowance)}',
-                          ]),
+                  LayoutBuilder(
+                    builder: (context, constraints) => Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: [
+                        SizedBox(
+                          width: constraints.maxWidth < 380
+                              ? constraints.maxWidth
+                              : (constraints.maxWidth - 10) / 2,
+                          child: _MetricCard(
+                            label: 'วันนี้ใช้ได้',
+                            value: _money(data.dailyAllowance),
+                            note:
+                                'งบคงเหลือ ÷ ${projection?.daysRemaining ?? 1} วัน',
+                            tone: AppColors.mintSoft,
+                            onTap: () => _breakdown(context, 'งบใช้ได้วันนี้', [
+                              'งบยืดหยุ่นคงเหลือ ${_money(projection?.flexibleMoneyRemaining ?? Money.zero)}',
+                              '÷ ${projection?.daysRemaining ?? 1} วันที่เหลือ',
+                              '= ${_money(data.dailyAllowance)}',
+                            ]),
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: _MetricCard(
-                          label: 'Forecast สิ้นรอบ',
-                          value: _money(data.forecast),
-                          note: 'เหลือตามแผน',
-                          onTap: () => _breakdown(context, 'Forecast สิ้นรอบ', [
-                            'เงินจริง ${_money(projection?.actualMoney ?? Money.zero)}',
-                            '+ รายรับที่ยังไม่เข้า ${_money(projection?.expectedIncomeRemaining ?? Money.zero)}',
-                            '− ภาระที่ยังไม่จ่าย ${_money(projection?.unpaidObligations ?? Money.zero)}',
-                            '− งบที่ยังวางแผนใช้ ${_money(projection?.plannedFlexibleSpendRemaining ?? Money.zero)}',
-                            '= ${_money(data.forecast)}',
-                          ]),
+                        SizedBox(
+                          width: constraints.maxWidth < 380
+                              ? constraints.maxWidth
+                              : (constraints.maxWidth - 10) / 2,
+                          child: _MetricCard(
+                            label: 'คาดการณ์สิ้นรอบ',
+                            value: _money(data.forecast),
+                            note: 'เหลือตามแผน',
+                            onTap: () => _breakdown(context, 'Forecast สิ้นรอบ', [
+                              'เงินจริง ${_money(projection?.actualMoney ?? Money.zero)}',
+                              '+ รายรับที่ยังไม่เข้า ${_money(projection?.expectedIncomeRemaining ?? Money.zero)}',
+                              '− ภาระที่ยังไม่จ่าย ${_money(projection?.unpaidObligations ?? Money.zero)}',
+                              '− งบที่ยังวางแผนใช้ ${_money(projection?.plannedFlexibleSpendRemaining ?? Money.zero)}',
+                              '= ${_money(data.forecast)}',
+                            ]),
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 12),
                   InkWell(
@@ -869,6 +891,13 @@ class DashboardScreen extends StatelessWidget {
                     onSetup: () => _configureInstallment(context, state),
                   ),
                   const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    key: const Key('open-financial-calendar'),
+                    onPressed: () => state.go(AppStep.calendar),
+                    icon: const Icon(Icons.calendar_month_outlined),
+                    label: const Text('ปฏิทินการเงิน'),
+                  ),
+                  const SizedBox(height: 8),
                   FilledButton.icon(
                     onPressed: () async {
                       await showModalBottomSheet<void>(
@@ -1391,16 +1420,17 @@ class _MetricCard extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(18),
       child: Container(
-        height: 148,
+        constraints: const BoxConstraints(minHeight: 148),
         padding: const EdgeInsets.all(16),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
               label,
               style: const TextStyle(color: AppColors.muted, fontSize: 12),
             ),
-            const Spacer(),
+            const SizedBox(height: 18),
             FittedBox(
               child: Text(
                 value,
@@ -1413,6 +1443,8 @@ class _MetricCard extends StatelessWidget {
             const SizedBox(height: 6),
             Text(
               '$note ↗',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(color: AppColors.muted, fontSize: 11),
             ),
           ],
@@ -1594,16 +1626,7 @@ void _breakdown(BuildContext context, String title, List<String> rows) =>
         ),
       ),
     );
-String _money(Money value) {
-  final whole = value.satang ~/ 100;
-  final sign = whole < 0 ? '-' : '';
-  final digits = whole.abs().toString();
-  final grouped = digits.replaceAllMapped(
-    RegExp(r'\B(?=(\d{3})+(?!\d))'),
-    (_) => ',',
-  );
-  return '$sign฿$grouped';
-}
+String _money(Money value) => FinanceMoneyFormat.money(value);
 
 class _InstallmentCard extends StatelessWidget {
   const _InstallmentCard({required this.progress, required this.onSetup});
@@ -1618,12 +1641,12 @@ class _InstallmentCard extends StatelessWidget {
       child: InkWell(
         onTap: value == null
             ? onSetup
-            : () => _breakdown(context, 'Installment Progress', [
-                'Paid ${_money(value.paid)}',
-                'Remaining ${_money(value.remaining)}',
+            : () => _breakdown(context, 'ความคืบหน้าการผ่อน', [
+                'จ่ายแล้ว ${_money(value.paid)}',
+                'คงเหลือ ${_money(value.remaining)}',
                 if (value.overpayment.satang > 0)
-                  'Overpayment ${_money(value.overpayment)} — please review',
-                'Estimated remaining payments ${value.estimatedRemainingPayments ?? 'unknown'}',
+                  'จ่ายเกิน ${_money(value.overpayment)} — กรุณาตรวจสอบ',
+                'คาดว่าเหลือ ${value.estimatedRemainingPayments ?? 'ไม่ทราบ'} งวด',
               ]),
         borderRadius: BorderRadius.circular(18),
         child: Padding(
@@ -1638,8 +1661,8 @@ class _InstallmentCard extends StatelessWidget {
               const SizedBox(height: 8),
               Text(
                 value == null
-                    ? 'ยังไม่ได้ตั้ง Total Payable'
-                    : '${((value.progressRatio ?? 0) * 100).toStringAsFixed(0)}% complete',
+                    ? 'ยังไม่ได้ตั้งยอดที่ต้องจ่ายทั้งหมด'
+                    : 'จ่ายแล้ว ${((value.progressRatio ?? 0) * 100).toStringAsFixed(0)}%',
               ),
               if (value != null) ...[
                 const SizedBox(height: 8),
@@ -1650,7 +1673,7 @@ class _InstallmentCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  '${_money(value.remaining)} remaining • approximately ${value.estimatedRemainingPayments ?? '-'} payments',
+                  'คงเหลือ ${_money(value.remaining)} • ประมาณ ${value.estimatedRemainingPayments ?? '-'} งวด',
                 ),
               ] else
                 const Text('แตะเพื่อตั้งยอดสัญญาจริง โดยแอปจะไม่เดายอดให้'),
@@ -1731,86 +1754,4 @@ Future<void> _configureInstallment(BuildContext context, AppState state) async {
   total.dispose();
   paid.dispose();
   regular.dispose();
-}
-
-class BankNotificationSetupScreen extends StatefulWidget {
-  const BankNotificationSetupScreen({super.key});
-  @override
-  State<BankNotificationSetupScreen> createState() =>
-      _BankNotificationSetupScreenState();
-}
-
-class _BankNotificationSetupScreenState
-    extends State<BankNotificationSetupScreen> {
-  static const channel = MethodChannel('ngoen_ku_pai_nai/bank_notifications');
-  bool enabled = false;
-  bool access = false;
-  Future<void> refresh() async {
-    final granted =
-        await channel.invokeMethod<bool>('hasNotificationAccess') ?? false;
-    if (mounted) setState(() => access = granted);
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    refresh();
-  }
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Bank Notification Capture')),
-    body: ListView(
-      padding: const EdgeInsets.all(20),
-      children: [
-        const Text(
-          'EXPERIMENTAL • Android only',
-          style: TextStyle(
-            color: AppColors.orange,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-        const SizedBox(height: 12),
-        const Text(
-          'แอปจะตรวจเฉพาะธนาคารที่รองรับ แปลงข้อมูลในเครื่อง และสร้าง Pending event ก่อนเสมอ ไม่มีการลงรายจ่ายอัตโนมัติ',
-        ),
-        const SizedBox(height: 12),
-        SwitchListTile(
-          title: const Text('เปิดฟีเจอร์ทดลอง'),
-          subtitle: const Text('ปิดโดยค่าเริ่มต้น • ยกเลิกได้ทุกเมื่อ'),
-          value: enabled,
-          onChanged: (value) => setState(() => enabled = value),
-        ),
-        ListTile(
-          title: const Text('Notification Access'),
-          subtitle: Text(
-            access
-                ? 'Granted • Listening (no real bank adapter configured)'
-                : 'Permission missing',
-          ),
-          leading: Icon(
-            access ? Icons.check_circle : Icons.warning_amber,
-            color: access ? Colors.green : AppColors.orange,
-          ),
-        ),
-        FilledButton(
-          onPressed: enabled
-              ? () async {
-                  await channel.invokeMethod<void>('openNotificationAccess');
-                }
-              : null,
-          child: const Text('เปิด Android Notification Access'),
-        ),
-        const SizedBox(height: 12),
-        OutlinedButton(
-          onPressed: refresh,
-          child: const Text('ตรวจสิทธิ์อีกครั้ง'),
-        ),
-        const SizedBox(height: 20),
-        const _Info(
-          'ยังไม่รองรับธนาคารจริงจนกว่าจะมี package name และตัวอย่าง Notification ที่ปิดข้อมูลส่วนตัวแล้ว Raw notification จะไม่ถูกเก็บหรือส่งออกนอกเครื่อง',
-        ),
-      ],
-    ),
-  );
 }

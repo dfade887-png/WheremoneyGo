@@ -3,6 +3,9 @@ import 'package:flutter/services.dart';
 
 import '../core/money.dart';
 import 'app_state.dart';
+import 'candidate_inbox_screen.dart';
+import 'finance_components.dart';
+import 'notification_capture_screen.dart';
 import 'theme/app_theme.dart';
 
 class DailyDriverScreen extends StatefulWidget {
@@ -96,7 +99,7 @@ class _AccountsTab extends StatelessWidget {
           _HeroCard(
             title: 'เงินจริงรวม',
             value: _money(total),
-            subtitle: 'ผลรวมบัญชี Active ที่รวมในเงินจริง',
+            subtitle: 'ผลรวมบัญชีที่เปิดใช้งานและรวมในเงินจริง',
           ),
           const SizedBox(height: 12),
           if (state.accounts.isEmpty)
@@ -107,19 +110,25 @@ class _AccountsTab extends StatelessWidget {
           for (final account in state.accounts)
             Card(
               child: ListTile(
-                minTileHeight: 72,
+                minTileHeight: 76,
                 leading: Icon(_accountIcon(account['account_type'] as String?)),
-                title: Text(account['name'] as String),
-                subtitle: Text(
-                  '${_accountType(account['account_type'] as String?)} • ${account['is_active'] == 1 ? 'Active' : 'Archived'}',
+                title: Text(
+                  account['name'] as String,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                trailing: Text(
-                  _money(account['balance_satang'] as int),
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
+                subtitle: Text(
+                  '${_accountType(account['account_type'] as String?)} • ${account['is_active'] == 1 ? 'เปิดใช้งาน' : 'เก็บถาวร'}',
+                ),
+                trailing: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 130),
+                  child: FinanceAmountText(
+                    satang: account['balance_satang'] as int,
+                    textAlign: TextAlign.end,
                     color: (account['balance_satang'] as int) < 0
                         ? AppColors.red
                         : null,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                 ),
                 onTap: () => _accountActions(context, state, account),
@@ -143,7 +152,7 @@ class _AccountsTab extends StatelessWidget {
           const Padding(
             padding: EdgeInsets.only(top: 8),
             child: Text(
-              'แตะค้างบัญชีเพื่อ Archive/Restore • บัญชีสุดท้ายปิดไม่ได้',
+              'แตะค้างบัญชีเพื่อเก็บถาวร/นำกลับ • บัญชีสุดท้ายปิดไม่ได้',
               style: TextStyle(color: AppColors.muted),
             ),
           ),
@@ -170,6 +179,7 @@ class _ActivityTab extends StatelessWidget {
             final type = row['type'] as String;
             final incoming =
                 type == 'income' || type == 'refund' || type == 'transfer_in';
+            final note = row['note'] as String?;
             return Dismissible(
               key: ValueKey(row['id']),
               background: Container(
@@ -196,6 +206,7 @@ class _ActivityTab extends StatelessWidget {
                 }
               },
               child: ListTile(
+                minVerticalPadding: 8,
                 leading: CircleAvatar(
                   child: Icon(_icon(row['icon_key'] as String?)),
                 ),
@@ -203,14 +214,20 @@ class _ActivityTab extends StatelessWidget {
                   (row['category_name'] as String?) ?? _typeLabel(type),
                 ),
                 subtitle: Text(
-                  '${row['account_name']} • ${_date(row['occurred_at'] as String)}\n${row['source']} ${row['note'] == null ? '' : '• ${row['note']}'}',
+                  '${row['account_name']} • ${_date(row['occurred_at'] as String)}\n${_sourceLabel(row['source'] as String?)}${note == null ? '' : ' • $note'}',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                isThreeLine: true,
-                trailing: Text(
-                  '${incoming ? '+' : '-'}${_money(row['amount_satang'] as int)}',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
+                trailing: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 125),
+                  child: FinanceAmountText(
+                    satang: incoming
+                        ? row['amount_satang'] as int
+                        : -(row['amount_satang'] as int),
+                    signed: true,
+                    textAlign: TextAlign.end,
                     color: incoming ? Colors.green.shade700 : AppColors.red,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                 ),
                 onTap:
@@ -269,6 +286,27 @@ class _DataTab extends StatelessWidget {
           MaterialPageRoute(
             builder: (_) => FinancialProfilesScreen(state: state),
           ),
+        ),
+      ),
+      const SizedBox(height: 8),
+      OutlinedButton.icon(
+        icon: const Icon(Icons.notifications_active_outlined),
+        label: const Text('ตรวจจับรายการจากการแจ้งเตือน'),
+        onPressed: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => NotificationCaptureScreen(state: state),
+          ),
+        ),
+      ),
+      const SizedBox(height: 8),
+      OutlinedButton.icon(
+        key: const Key('open-candidate-inbox'),
+        icon: const Icon(Icons.fact_check_outlined),
+        label: const Text('รายการรอตรวจ'),
+        onPressed: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => CandidateInboxScreen(state: state)),
         ),
       ),
       const SizedBox(height: 8),
@@ -898,6 +936,8 @@ class _DailyQuickAddState extends State<DailyQuickAdd> {
   String type = 'expense';
   String? accountId, toAccountId, categoryId;
   bool saving = false;
+  bool showDetails = false;
+  String? saveError;
 
   @override
   void dispose() {
@@ -918,6 +958,8 @@ class _DailyQuickAddState extends State<DailyQuickAdd> {
         )
         .toList();
     final value = double.tryParse(amount.text);
+    final amountInvalid =
+        amount.text.isNotEmpty && (value == null || value <= 0);
     final ready =
         value != null &&
         value > 0 &&
@@ -984,10 +1026,13 @@ class _DailyQuickAddState extends State<DailyQuickAdd> {
                 inputFormatters: [
                   FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
                 ],
-                onChanged: (_) => setState(() {}),
-                decoration: const InputDecoration(
+                onChanged: (_) => setState(() => saveError = null),
+                decoration: InputDecoration(
                   labelText: 'จำนวนเงิน *',
                   suffixText: 'บาท',
+                  errorText: amountInvalid
+                      ? 'กรุณากรอกจำนวนเงินมากกว่า 0'
+                      : null,
                 ),
               ),
               const SizedBox(height: 12),
@@ -1047,17 +1092,34 @@ class _DailyQuickAddState extends State<DailyQuickAdd> {
                   },
                 ),
               const SizedBox(height: 12),
-              TextField(
-                controller: note,
-                decoration: const InputDecoration(
-                  labelText: 'หมายเหตุ (ไม่บังคับ)',
-                ),
+              ExpansionTile(
+                tilePadding: EdgeInsets.zero,
+                title: const Text('รายละเอียดเพิ่มเติม'),
+                initiallyExpanded: showDetails,
+                onExpansionChanged: (value) => showDetails = value,
+                children: [
+                  TextField(
+                    controller: note,
+                    decoration: const InputDecoration(
+                      labelText: 'หมายเหตุ (ไม่บังคับ)',
+                    ),
+                  ),
+                ],
               ),
+              if (saveError != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  saveError!,
+                  key: const Key('quick-add-error'),
+                  style: const TextStyle(color: AppColors.red),
+                ),
+              ],
               const SizedBox(height: 18),
               FilledButton(
                 onPressed: !ready || saving
                     ? null
                     : () async {
+                        if (saving) return;
                         setState(() => saving = true);
                         try {
                           final money = Money.fromBaht(value);
@@ -1079,15 +1141,13 @@ class _DailyQuickAddState extends State<DailyQuickAdd> {
                             );
                           }
                           if (context.mounted) Navigator.pop(context);
-                        } catch (error) {
+                        } catch (_) {
                           if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('บันทึกไม่สำเร็จ: $error'),
-                              ),
-                            );
+                            setState(() {
+                              saveError = 'บันทึกรายการไม่สำเร็จ กรุณาลองใหม่';
+                              saving = false;
+                            });
                           }
-                          setState(() => saving = false);
                         }
                       },
                 child: Text(saving ? 'กำลังบันทึก…' : 'บันทึก'),
@@ -1128,7 +1188,9 @@ Future<void> _accountActions(
                   : Icons.unarchive_outlined,
             ),
             title: Text(
-              account['is_active'] == 1 ? 'Archive บัญชี' : 'Restore บัญชี',
+              account['is_active'] == 1
+                  ? 'เก็บบัญชีไว้ถาวร'
+                  : 'นำบัญชีกลับมาใช้',
             ),
             onTap: () => Navigator.pop(context, 'archive'),
           ),
@@ -1579,7 +1641,13 @@ class _Empty extends StatelessWidget {
   );
 }
 
-String _money(int satang) => '฿${(satang / 100).toStringAsFixed(2)}';
+String _money(int satang) => FinanceMoneyFormat.satang(satang);
+String _sourceLabel(String? source) => switch (source) {
+  'manual' => 'บันทึกเอง',
+  'scheduled' => 'รายการตามกำหนด',
+  'statement' => 'Statement',
+  _ => 'รายการ',
+};
 String _date(String iso) {
   final d = DateTime.parse(iso).toLocal();
   return '${d.day}/${d.month}/${d.year + 543} ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';

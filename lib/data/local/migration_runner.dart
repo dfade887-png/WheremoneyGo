@@ -4,6 +4,7 @@ import 'schema_v1.dart';
 import 'schema_v2.dart';
 import 'schema_v3.dart';
 import 'schema_v4.dart';
+import 'schema_v5.dart';
 
 abstract final class MigrationRunner {
   static void migrateToV1(Database database, {List<String>? statements}) {
@@ -25,6 +26,7 @@ abstract final class MigrationRunner {
     List<String>? v2Statements,
     List<String>? v3Statements,
     List<String>? v4Statements,
+    List<String>? v5Statements,
   }) {
     migrateToV1(database);
     if (database.userVersion < SchemaV2.version) {
@@ -51,10 +53,25 @@ abstract final class MigrationRunner {
         rethrow;
       }
     }
-    if (database.userVersion >= SchemaV4.version) return;
+    if (database.userVersion < SchemaV4.version) {
+      database.execute('BEGIN IMMEDIATE');
+      try {
+        for (final statement in v4Statements ?? SchemaV4.statements) {
+          database.execute(statement);
+        }
+        database.execute('COMMIT');
+      } catch (_) {
+        database.execute('ROLLBACK');
+        rethrow;
+      }
+    }
+    if (database.userVersion < SchemaV4.version ||
+        database.userVersion >= SchemaV5.version) {
+      return;
+    }
     database.execute('BEGIN IMMEDIATE');
     try {
-      for (final statement in v4Statements ?? SchemaV4.statements) {
+      for (final statement in v5Statements ?? SchemaV5.statements) {
         database.execute(statement);
       }
       database.execute('COMMIT');

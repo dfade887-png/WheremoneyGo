@@ -7,7 +7,7 @@ void main() {
   tearDown(() => repository.dispose());
 
   test('existing database is assigned to default profile', () async {
-    expect(await repository.schemaVersion(), 4);
+    expect(await repository.schemaVersion(), 5);
     expect(repository.activeProfileId, 'legacy-default-profile');
     expect((await repository.profiles()).single['name'], 'ข้อมูลเดิม');
   });

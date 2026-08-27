@@ -2,7 +2,6 @@
 setlocal EnableExtensions DisableDelayedExpansion
 cd /d "%~dp0"
 set "PROJECT_DIR=%~dp0"
-set "CHECK_DIR=%TEMP%\ngoen_ku_pai_nai_git_check"
 title Project Git Update
 
 echo.
@@ -22,17 +21,21 @@ if not exist ".git" (
   goto :failed
 )
 
-set "FLUTTER_CMD=flutter"
-where flutter >nul 2>nul
-if errorlevel 1 set "FLUTTER_CMD=C:\Users\pondz\Documents\Codex\tools\flutter\bin\flutter.bat"
-
-if not exist "%FLUTTER_CMD%" (
-  where flutter >nul 2>nul
-  if errorlevel 1 (
-    echo [ERROR] Flutter was not found.
-    goto :failed
-  )
+set "FLUTTER_CMD="
+for /f "delims=" %%F in ('where flutter.bat 2^>nul') do if not defined FLUTTER_CMD set "FLUTTER_CMD=%%F"
+if not defined FLUTTER_CMD if exist "C:\Users\pondz\Documents\Codex\tools\flutter\bin\flutter.bat" set "FLUTTER_CMD=C:\Users\pondz\Documents\Codex\tools\flutter\bin\flutter.bat"
+if not defined FLUTTER_CMD (
+  echo [ERROR] Flutter was not found.
+  goto :failed
 )
+for %%D in ("%FLUTTER_CMD%") do set "FLUTTER_BIN=%%~dpD"
+set "DART_CMD=%FLUTTER_BIN%cache\dart-sdk\bin\dart.exe"
+if not exist "%DART_CMD%" (
+  echo [ERROR] Dart SDK bundled with Flutter was not found.
+  goto :failed
+)
+echo Using Flutter: %FLUTTER_CMD%
+echo Using Dart:    %DART_CMD%
 
 echo [1/6] Checking tracked signing secrets...
 for %%F in (key.properties *.jks *.keystore) do (
@@ -44,24 +47,15 @@ for %%F in (key.properties *.jks *.keystore) do (
 )
 
 echo [2/6] Running Flutter Analyze...
-if exist "%CHECK_DIR%" rmdir /s /q "%CHECK_DIR%"
-mkdir "%CHECK_DIR%" >nul 2>nul
-xcopy "%PROJECT_DIR%lib" "%CHECK_DIR%\lib" /E /I /Q /Y >nul
-xcopy "%PROJECT_DIR%test" "%CHECK_DIR%\test" /E /I /Q /Y >nul
-copy /Y "%PROJECT_DIR%pubspec.yaml" "%CHECK_DIR%\pubspec.yaml" >nul
-copy /Y "%PROJECT_DIR%pubspec.lock" "%CHECK_DIR%\pubspec.lock" >nul
-copy /Y "%PROJECT_DIR%analysis_options.yaml" "%CHECK_DIR%\analysis_options.yaml" >nul
-cd /d "%CHECK_DIR%"
-call "%FLUTTER_CMD%" pub get >nul
+cd /d "%PROJECT_DIR%"
+call "%FLUTTER_CMD%" pub get
 if errorlevel 1 (
   echo [ERROR] Flutter Pub Get failed in the validation workspace.
-  cd /d "%PROJECT_DIR%"
   goto :failed
 )
-call "%FLUTTER_CMD%" analyze
+call "%DART_CMD%" analyze lib test
 if errorlevel 1 (
   echo [ERROR] Analyze failed. Nothing was committed.
-  cd /d "%PROJECT_DIR%"
   goto :failed
 )
 
@@ -69,10 +63,8 @@ echo [3/6] Running Flutter Tests...
 call "%FLUTTER_CMD%" test
 if errorlevel 1 (
   echo [ERROR] Tests failed. Nothing was committed.
-  cd /d "%PROJECT_DIR%"
   goto :failed
 )
-cd /d "%PROJECT_DIR%"
 
 if /i "%~1"=="--check" goto :check_passed
 

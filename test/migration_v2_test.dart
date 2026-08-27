@@ -13,7 +13,7 @@ void main() {
       "INSERT INTO installments(id,name,amount_satang,due_day,start_date,created_at,updated_at) VALUES('phone','Phone',100000,1,'2026-01-01','x','x')",
     );
     MigrationRunner.migrateToLatest(db);
-    expect(db.userVersion, 4);
+    expect(db.userVersion, 5);
     final row = db
         .select(
           "SELECT total_payable_satang,status FROM installments WHERE id='phone'",

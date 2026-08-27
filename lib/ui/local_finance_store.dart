@@ -255,7 +255,7 @@ final class LocalFinanceStore {
             as int;
     final movement =
         repository.query(
-              "SELECT COALESCE(SUM(CASE WHEN type IN ('income','refund','transfer_in') THEN amount_satang WHEN type IN ('expense','transfer_out') THEN -amount_satang WHEN type='balance_adjustment' THEN amount_satang ELSE 0 END),0) AS total FROM transactions WHERE deleted_at IS NULL AND account_id=?",
+              "SELECT COALESCE(SUM(CASE WHEN type IN ('income','refund','transfer_in') THEN amount_satang WHEN type IN ('expense','transfer_out') THEN -amount_satang WHEN type='balance_adjustment' THEN amount_satang ELSE 0 END),0) AS total FROM transactions WHERE status='confirmed' AND deleted_at IS NULL AND account_id=?",
               [_accountId],
             ).first['total']
             as int;

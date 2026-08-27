@@ -24,7 +24,10 @@ void main() {
       "INSERT INTO transactions(id,account_id,category_id,type,amount_satang,occurred_at,created_at,updated_at) VALUES('t','a','c','expense',10000,?,?,?)",
       [now, now, now],
     );
-    MigrationRunner.migrateToLatest(db);
+    MigrationRunner.migrateToLatest(
+      db,
+      v5Statements: ['PRAGMA user_version = 4'],
+    );
     expect(db.userVersion, 4);
     expect(
       db

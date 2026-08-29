@@ -6,6 +6,32 @@ import 'package:ngoen_ku_pai_nai/ui/finance_app.dart';
 import 'package:ngoen_ku_pai_nai/ui/local_finance_store.dart';
 
 void main() {
+  testWidgets('calendar create action opens production scheduled form', (
+    tester,
+  ) async {
+    final store = LocalFinanceStore.memory();
+    await store.repository.createAccount(
+      name: 'SCB',
+      type: 'bank',
+      openingBalanceSatang: 100000,
+    );
+    await store.repository.createCategory(
+      name: 'สุขภาพ',
+      type: 'expense',
+      iconKey: 'health',
+    );
+    final state = AppState(store: store);
+    await tester.pumpWidget(FinanceApp(state: state));
+    await tester.pumpAndSettle();
+    state.go(AppStep.calendar);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('calendar-create-scheduled')));
+    await tester.pumpAndSettle();
+    expect(find.text('เพิ่มรายการล่วงหน้า'), findsWidgets);
+    expect(find.byKey(const Key('scheduled-title')), findsOneWidget);
+  });
+
   testWidgets('calendar fits a small screen with large Thai text scaling', (
     tester,
   ) async {

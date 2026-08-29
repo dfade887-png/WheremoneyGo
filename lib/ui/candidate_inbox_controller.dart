@@ -1,13 +1,16 @@
 import 'package:flutter/foundation.dart';
 
 import '../domain/candidate_review.dart';
+import '../domain/transfer_correlation.dart';
 
 final class CandidateInboxController extends ChangeNotifier {
   CandidateInboxController(this.repository, {this.onFinancialChange});
 
   final CandidateReviewRepository repository;
   final Future<void> Function()? onFinancialChange;
+  final Set<String> _rejectedCorrelationPairs = {};
   List<CandidateReviewItem> pendingCandidates = const [];
+  Map<String, TransferCorrelationResult> correlations = const {};
   List<CandidateTargetSummary> alternatives = const [];
   CandidateReviewItem? selectedCandidate;
   bool loading = false;
@@ -20,6 +23,15 @@ final class CandidateInboxController extends ChangeNotifier {
     notifyListeners();
     try {
       pendingCandidates = await repository.pendingCandidateReviews();
+      if (repository is TransferCorrelationRepository) {
+        final results = await (repository as TransferCorrelationRepository)
+            .correlatePendingCandidates();
+        correlations = {
+          for (final item in results)
+            if (!_rejectedCorrelationPairs.contains(_pairKey(item)))
+              item.candidateId: item,
+        };
+      }
     } catch (_) {
       error = 'โหลดรายการรอตรวจไม่สำเร็จ กรุณาลองใหม่';
     } finally {
@@ -84,6 +96,48 @@ final class CandidateInboxController extends ChangeNotifier {
 
   Future<bool> ignore() =>
       _resolve(() => repository.ignoreCandidate(selectedCandidate!.id));
+
+  TransferCorrelationResult? correlationFor(String candidateId) {
+    final result = correlations[candidateId];
+    return result?.hasPair == true ? result : null;
+  }
+
+  void rejectCorrelation(TransferCorrelationResult result) {
+    _rejectedCorrelationPairs.add(_pairKey(result));
+    correlations = Map.of(correlations)
+      ..remove(result.candidateId)
+      ..remove(result.pairedCandidateId);
+    notifyListeners();
+  }
+
+  Future<bool> confirmCorrelation(TransferCorrelationResult result) async {
+    if (repository is! TransferCorrelationRepository ||
+        resolvingCandidateId != null) {
+      return false;
+    }
+    resolvingCandidateId = result.candidateId;
+    error = null;
+    notifyListeners();
+    try {
+      final resolution = await (repository as TransferCorrelationRepository)
+          .confirmCorrelatedTransfer(result);
+      if (resolution.createdFinancialRecord) await onFinancialChange?.call();
+      await load();
+      return true;
+    } catch (_) {
+      error = 'คำแนะนำการโอนเปลี่ยนไปแล้ว กรุณารีเฟรชและตรวจอีกครั้ง';
+      await load();
+      return false;
+    } finally {
+      resolvingCandidateId = null;
+      notifyListeners();
+    }
+  }
+
+  static String _pairKey(TransferCorrelationResult result) {
+    final pair = [result.candidateId, ?result.pairedCandidateId]..sort();
+    return pair.join('|');
+  }
 
   Future<bool> _resolve(
     Future<CandidateResolutionResult> Function() action,

@@ -72,6 +72,32 @@ final class RulePreviewResult {
   final String? candidateType, accountId, categoryId, error;
 }
 
+final class RawNotificationSample {
+  const RawNotificationSample({
+    required this.id,
+    required this.notificationSourceId,
+    required this.capturedAt,
+    required this.parseStatus,
+    this.title,
+    this.body,
+    this.senderOrChat,
+  });
+  final String id, notificationSourceId, parseStatus;
+  final DateTime capturedAt;
+  final String? title, body, senderOrChat;
+}
+
+final class NotificationReprocessSummary {
+  const NotificationReprocessSummary({
+    required this.examined,
+    required this.created,
+    required this.noMatch,
+    required this.ambiguous,
+    required this.existing,
+  });
+  final int examined, created, noMatch, ambiguous, existing;
+}
+
 abstract final class NotificationRuleEngine {
   static RulePreviewResult preview({
     required NotificationRule rule,
@@ -204,5 +230,13 @@ abstract interface class NotificationRuleRepository {
     NotificationRule rule,
     NotificationRuleSample sample,
   );
+  Future<List<RawNotificationSample>> recentRawNotificationSamples(
+    String sourceId, {
+    int limit = 30,
+  });
+  Future<NotificationReprocessSummary> reprocessRawNotifications(
+    String sourceId, {
+    int limit = 50,
+  });
   Future<String?> processRawNotification(String rawEventId);
 }

@@ -4,6 +4,7 @@ import '../data/notification_capture_bridge.dart';
 import '../domain/notification_capture.dart';
 import 'app_state.dart';
 import 'theme/app_theme.dart';
+import 'notification_rule_builder_screen.dart';
 
 class NotificationCaptureScreen extends StatefulWidget {
   const NotificationCaptureScreen({
@@ -146,6 +147,21 @@ class _NotificationCaptureScreenState extends State<NotificationCaptureScreen>
                   icon: const Icon(Icons.add),
                   label: const Text('เพิ่ม LINE เป็นแหล่งข้อมูล'),
                 ),
+              if (sources.any((source) => source.enabled)) ...[
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  key: const Key('open-rule-builder'),
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          NotificationRuleBuilderScreen(state: widget.state),
+                    ),
+                  ),
+                  icon: const Icon(Icons.rule_outlined),
+                  label: const Text('กฎการตรวจจับ'),
+                ),
+              ],
               const SizedBox(height: 20),
               const Card(
                 child: Padding(

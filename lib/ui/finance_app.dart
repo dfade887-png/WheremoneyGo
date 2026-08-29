@@ -3,12 +3,14 @@ import 'package:flutter/services.dart';
 import '../core/money.dart';
 import '../domain/models/financial_models.dart';
 import '../domain/payday_calendar.dart';
+import '../domain/financial_calendar.dart';
 import 'app_state.dart';
 import 'theme/app_theme.dart';
 import 'daily_driver_screen.dart';
-import 'financial_calendar_screen.dart';
 import 'finance_components.dart';
 import 'local_finance_store.dart';
+import 'production_shell.dart';
+import 'candidate_inbox_screen.dart';
 
 class FinanceApp extends StatefulWidget {
   const FinanceApp({this.state, super.key});
@@ -59,8 +61,8 @@ class _AppRouter extends StatelessWidget {
       AppStep.accounts => AccountScreen(state: state),
       AppStep.recurring => RecurringScreen(state: state),
       AppStep.saving => SavingScreen(state: state),
-      AppStep.dashboard => DashboardScreen(state: state),
-      AppStep.calendar => FinancialCalendarScreen(state: state),
+      AppStep.dashboard => ProductionShell(state: state),
+      AppStep.calendar => ProductionShell(state: state, initialIndex: 1),
     };
   }
 }
@@ -666,8 +668,15 @@ class _SavingScreenState extends State<SavingScreen> {
 }
 
 class DashboardScreen extends StatelessWidget {
-  const DashboardScreen({required this.state, super.key});
+  const DashboardScreen({
+    required this.state,
+    this.embedded = false,
+    this.onNavigate,
+    super.key,
+  });
   final AppState state;
+  final bool embedded;
+  final ValueChanged<int>? onNavigate;
   @override
   Widget build(BuildContext context) {
     final data = state.snapshot;
@@ -781,6 +790,16 @@ class DashboardScreen extends StatelessWidget {
               padding: const EdgeInsets.all(16),
               child: Column(
                 children: [
+                  _AccountDistribution(
+                    accounts: state.accounts,
+                    onOpen: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => DailyDriverScreen(state: state),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
                   LayoutBuilder(
                     builder: (context, constraints) => Wrap(
                       spacing: 10,
@@ -821,6 +840,46 @@ class DashboardScreen extends StatelessWidget {
                           ),
                         ),
                       ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  _UpcomingPanel(
+                    events: state.dashboardUpcoming,
+                    onOpen: () {
+                      if (onNavigate != null) {
+                        onNavigate!(1);
+                      } else {
+                        state.go(AppStep.calendar);
+                      }
+                    },
+                  ),
+                  if (state.dashboardCandidates.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    _CandidateSignal(
+                      count: state.dashboardCandidates.length,
+                      onOpen: () {
+                        if (onNavigate != null) {
+                          onNavigate!(3);
+                        } else {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) =>
+                                  CandidateInboxScreen(state: state),
+                            ),
+                          );
+                        }
+                      },
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+                  _RecentActivity(
+                    rows: state.activities.take(3).toList(growable: false),
+                    onOpen: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => DailyDriverScreen(state: state),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -930,6 +989,254 @@ class DashboardScreen extends StatelessWidget {
     );
   }
 }
+
+class _AccountDistribution extends StatelessWidget {
+  const _AccountDistribution({required this.accounts, required this.onOpen});
+  final List<Map<String, Object?>> accounts;
+  final VoidCallback onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = accounts.where((row) => row['is_active'] == 1).take(4);
+    return Container(
+      key: const Key('dashboard-account-distribution'),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              const Text(
+                'เงินอยู่ที่ไหน',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+              ),
+              TextButton(
+                onPressed: onOpen,
+                child: const Text('ดูบัญชีทั้งหมด'),
+              ),
+            ],
+          ),
+          if (active.isEmpty)
+            const Text(
+              'ยังไม่มีบัญชี',
+              style: TextStyle(color: AppColors.muted),
+            )
+          else
+            for (final account in active)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 5),
+                child: Row(
+                  children: [
+                    Icon(
+                      account['account_type'] == 'cash'
+                          ? Icons.payments_outlined
+                          : Icons.account_balance_outlined,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        account['name'] as String,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    SizedBox(
+                      width: 130,
+                      child: FinanceAmountText(
+                        satang: account['balance_satang'] as int,
+                        textAlign: TextAlign.end,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+        ],
+      ),
+    );
+  }
+}
+
+class _UpcomingPanel extends StatelessWidget {
+  const _UpcomingPanel({required this.events, required this.onOpen});
+  final List<FinancialCalendarEvent> events;
+  final VoidCallback onOpen;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    key: const Key('dashboard-upcoming'),
+    padding: const EdgeInsets.all(18),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(18),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Wrap(
+          alignment: WrapAlignment.spaceBetween,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            const Text(
+              'เร็ว ๆ นี้',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+            ),
+            TextButton(onPressed: onOpen, child: const Text('ดูปฏิทินทั้งหมด')),
+          ],
+        ),
+        if (events.isEmpty)
+          const Text(
+            'ยังไม่มีรายการที่กำลังจะมาถึง',
+            style: TextStyle(color: AppColors.muted),
+          )
+        else
+          for (final event in events)
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: CircleAvatar(
+                child: Text('${event.dateTime.toLocal().day}'),
+              ),
+              title: Text(
+                event.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Text(
+                event.displayStatus == FinancialCalendarDisplayStatus.due
+                    ? 'ถึงกำหนด • ต้องตรวจ'
+                    : 'รายการล่วงหน้า',
+              ),
+              trailing: SizedBox(
+                width: 125,
+                child: FinanceAmountText(
+                  satang: event.direction == FinancialCalendarDirection.outgoing
+                      ? -event.amountSatang
+                      : event.amountSatang,
+                  signed:
+                      event.direction != FinancialCalendarDirection.transfer,
+                  textAlign: TextAlign.end,
+                  color: event.direction == FinancialCalendarDirection.outgoing
+                      ? AppColors.red
+                      : AppColors.violet,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ),
+      ],
+    ),
+  );
+}
+
+class _CandidateSignal extends StatelessWidget {
+  const _CandidateSignal({required this.count, required this.onOpen});
+  final int count;
+  final VoidCallback onOpen;
+  @override
+  Widget build(BuildContext context) => Material(
+    color: const Color(0xFFFFE8F3),
+    borderRadius: BorderRadius.circular(18),
+    child: ListTile(
+      key: const Key('dashboard-candidate-signal'),
+      onTap: onOpen,
+      leading: const Icon(Icons.fact_check_outlined, color: AppColors.violet),
+      title: Text(
+        'มี $count รายการรอตรวจ',
+        style: const TextStyle(fontWeight: FontWeight.w800),
+      ),
+      subtitle: const Text('ตรวจให้ชัวร์ก่อนเงินจะเข้า Ledger'),
+      trailing: const Icon(Icons.chevron_right),
+    ),
+  );
+}
+
+class _RecentActivity extends StatelessWidget {
+  const _RecentActivity({required this.rows, required this.onOpen});
+  final List<Map<String, Object?>> rows;
+  final VoidCallback onOpen;
+  @override
+  Widget build(BuildContext context) => Container(
+    key: const Key('dashboard-recent-activity'),
+    padding: const EdgeInsets.all(18),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(18),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Wrap(
+          alignment: WrapAlignment.spaceBetween,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            const Text(
+              'ล่าสุด',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+            ),
+            TextButton(onPressed: onOpen, child: const Text('ดูทั้งหมด')),
+          ],
+        ),
+        if (rows.isEmpty)
+          const Text('ยังไม่มีรายการ', style: TextStyle(color: AppColors.muted))
+        else
+          for (final row in rows)
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(_activityIcon(row['type'] as String)),
+              title: Text(
+                (row['category_name'] as String?) ??
+                    _activityLabel(row['type'] as String),
+              ),
+              subtitle: Text(
+                row['account_name'] as String? ?? 'บัญชีไม่ทราบชื่อ',
+              ),
+              trailing: SizedBox(
+                width: 125,
+                child: FinanceAmountText(
+                  satang: _activitySigned(row),
+                  signed: !_isTransfer(row['type'] as String),
+                  textAlign: TextAlign.end,
+                  color: _activitySigned(row) < 0 ? AppColors.red : null,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ),
+      ],
+    ),
+  );
+}
+
+bool _isTransfer(String type) =>
+    type == 'transfer_in' || type == 'transfer_out';
+int _activitySigned(Map<String, Object?> row) {
+  final type = row['type'] as String;
+  final amount = row['amount_satang'] as int;
+  if (_isTransfer(type)) return amount;
+  return type == 'income' || type == 'refund' ? amount : -amount;
+}
+
+String _activityLabel(String type) => switch (type) {
+  'income' => 'รายรับ',
+  'expense' => 'รายจ่าย',
+  'refund' => 'เงินคืน',
+  'transfer_in' || 'transfer_out' => 'โอนระหว่างบัญชี',
+  _ => 'ปรับยอดบัญชี',
+};
+IconData _activityIcon(String type) => switch (type) {
+  'income' => Icons.south_west_rounded,
+  'expense' => Icons.north_east_rounded,
+  'refund' => Icons.replay_rounded,
+  'transfer_in' || 'transfer_out' => Icons.swap_horiz_rounded,
+  _ => Icons.tune_rounded,
+};
 
 class QuickAddSheet extends StatefulWidget {
   const QuickAddSheet({super.key});

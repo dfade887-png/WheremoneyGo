@@ -2,14 +2,21 @@ import 'package:flutter/material.dart';
 
 import '../domain/candidate_matching.dart';
 import '../domain/candidate_review.dart';
+import '../domain/transfer_correlation.dart';
 import 'app_state.dart';
 import 'candidate_inbox_controller.dart';
 import 'finance_components.dart';
 
 class CandidateInboxScreen extends StatefulWidget {
-  const CandidateInboxScreen({this.state, this.controller, super.key});
+  const CandidateInboxScreen({
+    this.state,
+    this.controller,
+    this.embedded = false,
+    super.key,
+  });
   final AppState? state;
   final CandidateInboxController? controller;
+  final bool embedded;
   @override
   State<CandidateInboxScreen> createState() => _CandidateInboxScreenState();
 }
@@ -42,7 +49,9 @@ class _CandidateInboxScreenState extends State<CandidateInboxScreen> {
   Widget build(BuildContext context) {
     final controller = _controller;
     return Scaffold(
-      appBar: AppBar(title: const Text('รายการรอตรวจ')),
+      appBar: widget.embedded
+          ? null
+          : AppBar(title: const Text('รายการรอตรวจ')),
       body: controller == null
           ? const SafeArea(
               child: FinanceEmptyState(
@@ -95,6 +104,8 @@ class _CandidateInboxScreenState extends State<CandidateInboxScreen> {
         itemCount: controller.pendingCandidates.length,
         itemBuilder: (_, index) {
           final item = controller.pendingCandidates[index];
+          final rawCorrelation = controller.correlations[item.id];
+          final correlation = controller.correlationFor(item.id);
           return Card(
             key: ValueKey('candidate-${item.id}'),
             margin: const EdgeInsets.only(bottom: 12),
@@ -113,16 +124,80 @@ class _CandidateInboxScreenState extends State<CandidateInboxScreen> {
                               ?.copyWith(fontWeight: FontWeight.w800),
                         ),
                       ),
-                      Chip(label: Text('${item.sourceLabel} ตรวจพบ')),
+                      Chip(
+                        label: Text(_CandidateDetailSheet.typeLabel(item.type)),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 8),
-                  Text('บัญชี: ${item.accountName ?? 'ยังไม่ระบุ'}'),
-                  Text('เวลา: ${dateTime(item.occurredAt)}'),
+                  Text(
+                    '${item.accountName ?? 'ยังไม่ระบุบัญชี'} • ตรวจพบจาก ${item.sourceLabel}',
+                  ),
+                  Text(dateTime(item.occurredAt)),
                   if (item.merchantOrSender != null)
                     Text('ผู้ส่ง/ร้านค้า: ${item.merchantOrSender}'),
                   const SizedBox(height: 10),
                   Text(recommendation(item.match.kind)),
+                  if (rawCorrelation?.kind ==
+                      TransferCorrelationKind.ambiguous) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      key: ValueKey('transfer-ambiguous-${item.id}'),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.errorContainer,
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: const Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(Icons.rule_folder_outlined),
+                          SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'พบคู่การโอนมากกว่าหนึ่งรายการ กรุณาตรวจแต่ละรายการแยกกัน ระบบจะไม่จับคู่ให้อัตโนมัติ',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  if (correlation != null) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      key: ValueKey('transfer-suggestion-${item.id}'),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFE8F3),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _correlationLabel(correlation.kind),
+                            style: const TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(_correlationAccounts(correlation)),
+                          Text(
+                            'จับคู่จากรายการรอตรวจ 2 รายการ • ${FinanceMoneyFormat.satang(correlation.amountSatang)}',
+                          ),
+                          const SizedBox(height: 8),
+                          FilledButton.tonal(
+                            key: ValueKey('review-transfer-${item.id}'),
+                            onPressed: controller.resolvingCandidateId == null
+                                ? () => _openTransferReview(
+                                    controller,
+                                    correlation,
+                                  )
+                                : null,
+                            child: const Text('ตรวจสอบการโอน'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 10),
                   Align(
                     alignment: Alignment.centerRight,
@@ -166,6 +241,54 @@ class _CandidateInboxScreenState extends State<CandidateInboxScreen> {
     );
   }
 
+  Future<void> _openTransferReview(
+    CandidateInboxController controller,
+    TransferCorrelationResult correlation,
+  ) async {
+    final accounts = {
+      for (final row
+          in widget.state?.accounts ?? const <Map<String, Object?>>[])
+        row['id'] as String: row['name'] as String,
+    };
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (sheetContext) => ListenableBuilder(
+        listenable: controller,
+        builder: (_, _) => _TransferCorrelationReview(
+          controller: controller,
+          correlation: correlation,
+          sourceName: accounts[correlation.sourceAccountId] ?? 'บัญชีต้นทาง',
+          destinationName:
+              accounts[correlation.destinationAccountId] ?? 'บัญชีปลายทาง',
+          close: () => Navigator.pop(sheetContext),
+        ),
+      ),
+    );
+  }
+
+  String _correlationAccounts(TransferCorrelationResult result) {
+    String account(String? id) =>
+        widget.state?.accounts
+                .where((row) => row['id'] == id)
+                .firstOrNull?['name']
+            as String? ??
+        'บัญชีไม่ทราบชื่อ';
+    return '${account(result.sourceAccountId)} → ${account(result.destinationAccountId)}';
+  }
+
+  static String _correlationLabel(
+    TransferCorrelationKind kind,
+  ) => switch (kind) {
+    TransferCorrelationKind.existingTransfer =>
+      'น่าจะเป็นการโอนที่บันทึกไว้แล้ว',
+    TransferCorrelationKind.scheduledTransfer => 'น่าจะตรงกับรายการโอนล่วงหน้า',
+    TransferCorrelationKind.likelyTransferPair => 'อาจเป็นการโอนระหว่างบัญชี',
+    TransferCorrelationKind.ambiguous => 'พบคู่การโอนมากกว่าหนึ่งรายการ',
+    TransferCorrelationKind.noCorrelation => 'ยังไม่พบคู่การโอน',
+  };
+
   static int signedAmount(CandidateReviewItem item) =>
       const {'income', 'refund'}.contains(item.type)
       ? item.amountSatang
@@ -182,6 +305,206 @@ class _CandidateInboxScreenState extends State<CandidateInboxScreen> {
     String two(int n) => n.toString().padLeft(2, '0');
     return '${two(local.day)}/${two(local.month)}/${local.year} ${two(local.hour)}:${two(local.minute)}';
   }
+}
+
+class _TransferCorrelationReview extends StatelessWidget {
+  const _TransferCorrelationReview({
+    required this.controller,
+    required this.correlation,
+    required this.sourceName,
+    required this.destinationName,
+    required this.close,
+  });
+
+  final CandidateInboxController controller;
+  final TransferCorrelationResult correlation;
+  final String sourceName;
+  final String destinationName;
+  final VoidCallback close;
+
+  @override
+  Widget build(BuildContext context) {
+    final busy = controller.resolvingCandidateId != null;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        20,
+        20,
+        20,
+        20 + MediaQuery.viewInsetsOf(context).bottom,
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'ตรวจสอบการโอนระหว่างบัญชี',
+                    style: Theme.of(context).textTheme.headlineSmall,
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'ปิด',
+                  onPressed: busy ? null : close,
+                  icon: const Icon(Icons.close),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            FinanceAmountText(
+              satang: correlation.amountSatang,
+              style: Theme.of(
+                context,
+              ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 12),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    _TransferAccountRow(
+                      icon: Icons.account_balance_wallet_outlined,
+                      label: 'เงินออกจาก',
+                      accountName: sourceName,
+                    ),
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 8),
+                      child: Icon(Icons.arrow_downward),
+                    ),
+                    _TransferAccountRow(
+                      icon: Icons.savings_outlined,
+                      label: 'เงินเข้าที่',
+                      accountName: destinationName,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(switch (correlation.kind) {
+              TransferCorrelationKind.existingTransfer =>
+                'พบการโอนที่บันทึกไว้แล้ว ระบบจะเชื่อมรายการแจ้งเตือนทั้งสองโดยไม่สร้างรายการเงินจริงซ้ำ',
+              TransferCorrelationKind.scheduledTransfer =>
+                'พบรายการโอนล่วงหน้าที่ตรงกัน ระบบจะยืนยันรายการนั้นและเชื่อมการแจ้งเตือนทั้งสอง',
+              _ =>
+                'ตรวจพบจากรายการเงินออกและเงินเข้า 2 รายการที่ยอดและเวลาใกล้กัน',
+            }),
+            ExpansionTile(
+              tilePadding: EdgeInsets.zero,
+              title: const Text('ทำไมระบบถึงเสนอรายการนี้'),
+              children: [
+                for (final reason in correlation.reasonCodes)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('✓ $reason'),
+                  ),
+              ],
+            ),
+            Card(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              child: const Padding(
+                padding: EdgeInsets.all(14),
+                child: Text(
+                  'เงินจริงจะเปลี่ยนเมื่อคุณกดยืนยันเท่านั้น ไม่มีการโพสต์หรือจับคู่อัตโนมัติ',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            FilledButton(
+              key: const Key('confirm-correlated-transfer'),
+              onPressed: busy ? null : () => _confirm(context),
+              child: Text(
+                correlation.kind == TransferCorrelationKind.existingTransfer
+                    ? 'ยืนยันว่าเป็นการโอนที่บันทึกไว้แล้ว'
+                    : 'ยืนยันเป็นการโอนระหว่างบัญชี',
+              ),
+            ),
+            TextButton(
+              key: const Key('reject-correlated-transfer'),
+              onPressed: busy
+                  ? null
+                  : () {
+                      controller.rejectCorrelation(correlation);
+                      close();
+                    },
+              child: const Text('ไม่ใช่การโอนเดียวกัน'),
+            ),
+            TextButton(
+              onPressed: busy ? null : close,
+              child: const Text('กลับ'),
+            ),
+            if (busy) const Center(child: CircularProgressIndicator()),
+            if (controller.error != null)
+              Text(
+                controller.error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _confirm(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('ยืนยันการโอน?'),
+        content: Text(
+          '$sourceName → $destinationName\n${FinanceMoneyFormat.satang(correlation.amountSatang)}',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('กลับไปตรวจ'),
+          ),
+          FilledButton(
+            key: const Key('confirm-correlated-transfer-dialog'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('ยืนยัน'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && await controller.confirmCorrelation(correlation)) {
+      close();
+    }
+  }
+}
+
+class _TransferAccountRow extends StatelessWidget {
+  const _TransferAccountRow({
+    required this.icon,
+    required this.label,
+    required this.accountName,
+  });
+  final IconData icon;
+  final String label;
+  final String accountName;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      Icon(icon),
+      const SizedBox(width: 12),
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label, style: Theme.of(context).textTheme.bodySmall),
+            Text(
+              accountName,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+          ],
+        ),
+      ),
+    ],
+  );
 }
 
 class _CandidateDetailSheet extends StatelessWidget {
@@ -307,8 +630,17 @@ class _CandidateDetailSheet extends StatelessWidget {
                       Text(
                         '${target.accountName} • ${_CandidateInboxScreenState.dateTime(target.occurredAt)}',
                       ),
-                      for (final reason in target.reasons)
-                        Text('✓ ${friendlyReason(reason)}'),
+                      ExpansionTile(
+                        tilePadding: EdgeInsets.zero,
+                        title: const Text('ดูเหตุผล'),
+                        children: [
+                          for (final reason in target.reasons)
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text('✓ ${friendlyReason(reason)}'),
+                            ),
+                        ],
+                      ),
                       const SizedBox(height: 8),
                       FilledButton.tonal(
                         onPressed: busy ? null : () => _acceptTarget(target),
@@ -323,6 +655,28 @@ class _CandidateDetailSheet extends StatelessWidget {
                   ),
                 ),
               ),
+            const SizedBox(height: 8),
+            Card(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'ผลที่จะเกิดขึ้น',
+                      style: TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      item.type == 'transfer'
+                          ? 'จะสร้างการโอน ${FinanceMoneyFormat.satang(item.amountSatang)} แบบสองฝั่งหลังยืนยัน'
+                          : '${typeLabel(item.type)} ${FinanceMoneyFormat.satang(item.amountSatang)} จะเปลี่ยนเงินจริงหลังยืนยันเท่านั้น',
+                    ),
+                  ],
+                ),
+              ),
+            ),
             const SizedBox(height: 8),
             FilledButton(
               key: const Key('candidate-create-new'),

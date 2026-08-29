@@ -1020,6 +1020,11 @@ class _DailyQuickAddState extends State<DailyQuickAdd> {
               TextField(
                 controller: amount,
                 autofocus: true,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 38,
+                  fontWeight: FontWeight.w800,
+                ),
                 keyboardType: const TextInputType.numberWithOptions(
                   decimal: true,
                 ),
@@ -1028,7 +1033,8 @@ class _DailyQuickAddState extends State<DailyQuickAdd> {
                 ],
                 onChanged: (_) => setState(() => saveError = null),
                 decoration: InputDecoration(
-                  labelText: 'จำนวนเงิน *',
+                  labelText: 'จำนวนเงิน',
+                  prefixText: '฿',
                   suffixText: 'บาท',
                   errorText: amountInvalid
                       ? 'กรุณากรอกจำนวนเงินมากกว่า 0'
@@ -1116,6 +1122,7 @@ class _DailyQuickAddState extends State<DailyQuickAdd> {
               ],
               const SizedBox(height: 18),
               FilledButton(
+                key: const Key('quick-add-save'),
                 onPressed: !ready || saving
                     ? null
                     : () async {

@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart';
 import '../core/money.dart';
 import '../domain/models/financial_models.dart';
 import '../domain/financial_snapshot.dart' as projection;
+import '../domain/financial_calendar.dart';
+import '../domain/candidate_review.dart';
 import '../data/repositories/sqlite_finance_repository.dart';
 import 'local_finance_store.dart';
 
@@ -54,6 +56,8 @@ final class AppState extends ChangeNotifier {
   List<Map<String, Object?>> profiles = const [];
   String? activeProfileId;
   projection.FinancialSnapshot? projectionSnapshot;
+  List<FinancialCalendarEvent> dashboardUpcoming = const [];
+  List<CandidateReviewItem> dashboardCandidates = const [];
   bool onboardingSubmitting = false;
 
   SqliteFinanceRepository get financeRepository {
@@ -178,6 +182,23 @@ final class AppState extends ChangeNotifier {
       minimumReserveSatang: inputs['minimumReserveSatang'] as int,
       savingGoalSatang: inputs['savingGoalSatang'] as int,
     );
+    final now = DateTime.now();
+    final upcoming = await financeRepository.calendarEvents(
+      from: now.toUtc(),
+      to: now.add(const Duration(days: 45)).toUtc(),
+      now: now.toUtc(),
+    );
+    dashboardUpcoming = upcoming.events
+        .where(
+          (event) =>
+              event.displayStatus == FinancialCalendarDisplayStatus.scheduled ||
+              event.displayStatus == FinancialCalendarDisplayStatus.due,
+        )
+        .take(3)
+        .toList(growable: false);
+    dashboardCandidates = (await financeRepository.pendingCandidateReviews())
+        .take(20)
+        .toList(growable: false);
     notifyListeners();
   }
 

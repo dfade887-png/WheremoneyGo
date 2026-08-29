@@ -4,12 +4,18 @@ import '../domain/financial_calendar.dart';
 import 'app_state.dart';
 import 'financial_calendar_controller.dart';
 import 'finance_components.dart';
+import 'scheduled_event_editor_screen.dart';
 import 'theme/app_theme.dart';
 
 class FinancialCalendarScreen extends StatefulWidget {
-  const FinancialCalendarScreen({required this.state, super.key});
+  const FinancialCalendarScreen({
+    required this.state,
+    this.embedded = false,
+    super.key,
+  });
 
   final AppState state;
+  final bool embedded;
 
   @override
   State<FinancialCalendarScreen> createState() =>
@@ -38,17 +44,22 @@ class _FinancialCalendarScreenState extends State<FinancialCalendarScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      title: const Text('ปฏิทินการเงิน'),
-      leading: IconButton(
-        key: const Key('calendar-back'),
-        onPressed: () => widget.state.go(AppStep.dashboard),
-        icon: const Icon(Icons.arrow_back_rounded),
-      ),
-      actions: [
-        TextButton(onPressed: controller.goToday, child: const Text('วันนี้')),
-      ],
-    ),
+    appBar: widget.embedded
+        ? null
+        : AppBar(
+            title: const Text('ปฏิทินการเงิน'),
+            leading: IconButton(
+              key: const Key('calendar-back'),
+              onPressed: () => widget.state.go(AppStep.dashboard),
+              icon: const Icon(Icons.arrow_back_rounded),
+            ),
+            actions: [
+              TextButton(
+                onPressed: controller.goToday,
+                child: const Text('วันนี้'),
+              ),
+            ],
+          ),
     body: SafeArea(
       child: ListenableBuilder(
         listenable: controller,
@@ -70,6 +81,24 @@ class _FinancialCalendarScreenState extends State<FinancialCalendarScreen> {
             child: ListView(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
               children: [
+                if (widget.embedded)
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'ปฏิทินการเงิน',
+                          style: TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: controller.goToday,
+                        child: const Text('วันนี้'),
+                      ),
+                    ],
+                  ),
                 _MonthHeader(controller: controller),
                 const SizedBox(height: 12),
                 _MonthGrid(controller: controller),
@@ -106,6 +135,17 @@ class _FinancialCalendarScreenState extends State<FinancialCalendarScreen> {
                       },
                       busy: controller.confirmationInProgress,
                       onConfirm: () => _confirm(event),
+                      onEdit:
+                          event.originKind ==
+                                  FinancialCalendarOriginKind.manualSchedule &&
+                              event.scheduledEventId != null &&
+                              (event.displayStatus ==
+                                      FinancialCalendarDisplayStatus
+                                          .scheduled ||
+                                  event.displayStatus ==
+                                      FinancialCalendarDisplayStatus.due)
+                          ? () => _openEdit(event)
+                          : null,
                     ),
                   ),
                 if (controller.calendarResult!.events.isEmpty) ...[
@@ -118,7 +158,67 @@ class _FinancialCalendarScreenState extends State<FinancialCalendarScreen> {
         },
       ),
     ),
+    floatingActionButton: FloatingActionButton.extended(
+      key: const Key('calendar-create-scheduled'),
+      onPressed: _openCreate,
+      icon: const Icon(Icons.add),
+      label: const Text('เพิ่มรายการล่วงหน้า'),
+    ),
   );
+
+  Future<void> _openCreate() async {
+    final selected = controller.selectedDate;
+    final now = DateTime.now();
+    var initial = DateTime(selected.year, selected.month, selected.day, 9);
+    if (!initial.isAfter(now)) initial = now.add(const Duration(hours: 1));
+    final changed = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ScheduledEventEditorScreen(
+          repository: widget.state.financeRepository,
+          accounts: widget.state.accounts,
+          categories: widget.state.categories,
+          initialScheduledAt: initial,
+        ),
+      ),
+    );
+    if (changed == true) await _reloadAfterEdit();
+  }
+
+  Future<void> _openEdit(FinancialCalendarEvent event) async {
+    final id = event.scheduledEventId;
+    if (id == null ||
+        event.originKind != FinancialCalendarOriginKind.manualSchedule) {
+      return;
+    }
+    final existing = (await widget.state.financeRepository.scheduledEvents())
+        .where((item) => item.id == id)
+        .firstOrNull;
+    if (existing == null || !mounted) return;
+    final changed = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ScheduledEventEditorScreen(
+          repository: widget.state.financeRepository,
+          accounts: widget.state.accounts,
+          categories: widget.state.categories,
+          initialScheduledAt: existing.scheduledAt,
+          existing: existing,
+        ),
+      ),
+    );
+    if (changed == true) await _reloadAfterEdit();
+  }
+
+  Future<void> _reloadAfterEdit() async {
+    await widget.state.refreshDailyData();
+    await controller.load();
+    if (mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('อัปเดตแผนการเงินแล้ว')));
+    }
+  }
 
   Future<void> _confirm(FinancialCalendarEvent event) async {
     final early =
@@ -465,11 +565,13 @@ class _EventCard extends StatelessWidget {
     required this.accountNames,
     required this.busy,
     required this.onConfirm,
+    this.onEdit,
   });
   final FinancialCalendarEvent event;
   final Map<String, String> accountNames;
   final bool busy;
   final VoidCallback onConfirm;
+  final VoidCallback? onEdit;
   @override
   Widget build(BuildContext context) {
     final confirmable =
@@ -546,6 +648,13 @@ class _EventCard extends StatelessWidget {
                     key: Key('confirm-event-${event.id}'),
                     onPressed: busy ? null : onConfirm,
                     child: Text(_confirmLabel(event)),
+                  ),
+                if (onEdit != null)
+                  IconButton(
+                    key: Key('edit-event-${event.id}'),
+                    tooltip: 'แก้รายการล่วงหน้า',
+                    onPressed: busy ? null : onEdit,
+                    icon: const Icon(Icons.edit_outlined),
                   ),
               ],
             ),

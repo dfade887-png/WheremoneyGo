@@ -23,6 +23,7 @@ import '../../domain/notification_capture.dart';
 import '../../domain/notification_rule_parser.dart';
 import '../../domain/candidate_matching.dart';
 import '../../domain/candidate_review.dart';
+import '../../domain/transfer_correlation.dart';
 import '../local/migration_runner.dart';
 import '../local/schema_v5.dart';
 
@@ -37,7 +38,8 @@ final class SqliteFinanceRepository
         NotificationCaptureRepository,
         NotificationRuleRepository,
         CandidateMatchingRepository,
-        CandidateReviewRepository {
+        CandidateReviewRepository,
+        TransferCorrelationRepository {
   SqliteFinanceRepository._(this.database);
 
   factory SqliteFinanceRepository.memory() {
@@ -344,11 +346,18 @@ final class SqliteFinanceRepository
       throw ArgumentError.value(directionRule);
     }
     final source = database.select(
-      'SELECT id FROM notification_sources WHERE id=? AND profile_id=? AND deleted_at IS NULL',
+      'SELECT id,default_account_id FROM notification_sources WHERE id=? AND profile_id=? AND deleted_at IS NULL',
       [notificationSourceId, activeProfileId],
     );
     if (source.isEmpty) throw StateError('Notification source unavailable');
-    _validateRuleMapping(accountId, categoryId);
+    _validateRuleDefinition(
+      name: name,
+      bodyPattern: bodyPattern,
+      parserKind: parserKind,
+      directionRule: directionRule,
+      accountId: accountId ?? source.single['default_account_id'] as String?,
+      categoryId: categoryId,
+    );
     final id = _uuid.v4();
     final now = DateTime.now().toUtc().toIso8601String();
     database.execute(
@@ -376,20 +385,45 @@ final class SqliteFinanceRepository
     return id;
   }
 
-  void _validateRuleMapping(String? accountId, String? categoryId) {
-    if (accountId != null &&
-        database.select(
-          'SELECT id FROM accounts WHERE id=? AND profile_id=? AND deleted_at IS NULL',
-          [accountId, activeProfileId],
-        ).isEmpty) {
+  void _validateRuleDefinition({
+    required String name,
+    required String bodyPattern,
+    required String parserKind,
+    required String directionRule,
+    required String? accountId,
+    required String? categoryId,
+  }) {
+    if (name.trim().isEmpty) throw ArgumentError('Rule name is required');
+    if (bodyPattern.trim().isEmpty) {
+      throw ArgumentError('Body pattern is required');
+    }
+    if (parserKind == 'regex') {
+      try {
+        RegExp(bodyPattern);
+      } on FormatException {
+        throw ArgumentError('Invalid regular expression');
+      }
+    }
+    if (parserKind == 'template' && !bodyPattern.contains('{amount}')) {
+      throw ArgumentError('Template must contain {amount}');
+    }
+    if (accountId == null) throw StateError('Rule account is required');
+    if (database.select(
+      'SELECT id FROM accounts WHERE id=? AND profile_id=? AND is_active=1 AND deleted_at IS NULL',
+      [accountId, activeProfileId],
+    ).isEmpty) {
       throw StateError('Rule account unavailable');
     }
-    if (categoryId != null &&
-        database.select(
-          'SELECT id FROM categories WHERE id=? AND profile_id=? AND deleted_at IS NULL',
-          [categoryId, activeProfileId],
-        ).isEmpty) {
-      throw StateError('Rule category unavailable');
+    if (categoryId != null) {
+      final categories = database.select(
+        'SELECT category_type FROM categories WHERE id=? AND profile_id=? AND archived_at IS NULL AND deleted_at IS NULL',
+        [categoryId, activeProfileId],
+      );
+      final expected = directionRule == 'incoming' ? 'income' : 'expense';
+      if (categories.isEmpty ||
+          categories.single['category_type'] != expected) {
+        throw StateError('Rule category is unavailable or incompatible');
+      }
     }
   }
 
@@ -441,7 +475,19 @@ final class SqliteFinanceRepository
         }.contains(rule.directionRule)) {
       throw ArgumentError('Invalid rule configuration');
     }
-    _validateRuleMapping(rule.accountId, rule.categoryId);
+    final source = database.select(
+      'SELECT default_account_id FROM notification_sources WHERE id=? AND profile_id=? AND deleted_at IS NULL',
+      [rule.notificationSourceId, activeProfileId],
+    );
+    _validateRuleDefinition(
+      name: rule.name,
+      bodyPattern: rule.bodyPattern,
+      parserKind: rule.parserKind,
+      directionRule: rule.directionRule,
+      accountId:
+          rule.accountId ?? source.single['default_account_id'] as String?,
+      categoryId: rule.categoryId,
+    );
     database.execute(
       '''UPDATE notification_rules SET name=?,sender_or_chat_pattern=?,
          title_pattern=?,body_pattern=?,parser_kind=?,direction_rule=?,
@@ -496,6 +542,125 @@ final class SqliteFinanceRepository
       sample: sample,
       fallbackAccountId: source.single['default_account_id'] as String?,
     );
+  }
+
+  @override
+  Future<List<RawNotificationSample>> recentRawNotificationSamples(
+    String sourceId, {
+    int limit = 30,
+  }) async {
+    if (limit < 1 || limit > 100) throw ArgumentError.value(limit);
+    final owned = query(
+      '''SELECT id FROM notification_sources
+         WHERE id=? AND profile_id=? AND deleted_at IS NULL''',
+      [sourceId, activeProfileId],
+    );
+    if (owned.isEmpty) throw StateError('Notification source unavailable');
+    return query(
+          '''SELECT id,notification_source_id,title,body,sender_or_chat,captured_at,parse_status
+         FROM raw_notification_events
+         WHERE profile_id=? AND notification_source_id=? AND deleted_at IS NULL
+         ORDER BY captured_at DESC,id DESC LIMIT ?''',
+          [activeProfileId, sourceId, limit],
+        )
+        .map(
+          (row) => RawNotificationSample(
+            id: row['id'] as String,
+            notificationSourceId: row['notification_source_id'] as String,
+            capturedAt: DateTime.parse(row['captured_at'] as String).toUtc(),
+            parseStatus: row['parse_status'] as String,
+            title: row['title'] as String?,
+            body: row['body'] as String?,
+            senderOrChat: row['sender_or_chat'] as String?,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  @override
+  Future<NotificationReprocessSummary> reprocessRawNotifications(
+    String sourceId, {
+    int limit = 50,
+  }) async {
+    if (limit < 1 || limit > 100) throw ArgumentError.value(limit);
+    final source = query(
+      '''SELECT id FROM notification_sources
+         WHERE id=? AND profile_id=? AND enabled=1 AND deleted_at IS NULL''',
+      [sourceId, activeProfileId],
+    );
+    if (source.isEmpty) throw StateError('Notification source unavailable');
+    final rows = query(
+      '''SELECT raw.*,s.default_account_id FROM raw_notification_events raw
+         JOIN notification_sources s ON s.id=raw.notification_source_id
+         WHERE raw.profile_id=? AND raw.notification_source_id=?
+           AND raw.parse_status IN ('captured','parse_failed')
+           AND raw.deleted_at IS NULL
+         ORDER BY raw.captured_at DESC,raw.id DESC LIMIT ?''',
+      [activeProfileId, sourceId, limit],
+    );
+    var created = 0;
+    var noMatch = 0;
+    var ambiguous = 0;
+    var existing = 0;
+    for (final raw in rows) {
+      final evidenceBefore = query(
+        'SELECT candidate_id FROM candidate_evidence WHERE notification_event_id=?',
+        [raw['id']],
+      );
+      if (evidenceBefore.isNotEmpty) {
+        existing++;
+        continue;
+      }
+      final signatures = await _matchingRuleSignatures(raw);
+      if (signatures.isEmpty) {
+        noMatch++;
+        await processRawNotification(raw['id'] as String);
+      } else if (signatures.length > 1) {
+        ambiguous++;
+        await processRawNotification(raw['id'] as String);
+      } else {
+        final result = await processRawNotification(raw['id'] as String);
+        if (result == null) {
+          noMatch++;
+        } else {
+          created++;
+        }
+      }
+    }
+    return NotificationReprocessSummary(
+      examined: rows.length,
+      created: created,
+      noMatch: noMatch,
+      ambiguous: ambiguous,
+      existing: existing,
+    );
+  }
+
+  Future<Set<String>> _matchingRuleSignatures(Map<String, Object?> raw) async {
+    final rules = (await notificationRules(
+      raw['notification_source_id'] as String,
+    )).where((rule) => rule.enabled);
+    final sample = NotificationRuleSample(
+      packageName: raw['package_name'] as String,
+      capturedAt: DateTime.parse(raw['captured_at'] as String).toUtc(),
+      title: raw['title'] as String?,
+      body: raw['body'] as String?,
+      senderOrChat: raw['sender_or_chat'] as String?,
+    );
+    final signatures = <String>{};
+    for (final rule in rules) {
+      final preview = NotificationRuleEngine.preview(
+        rule: rule,
+        sample: sample,
+        fallbackAccountId: raw['default_account_id'] as String?,
+      );
+      if (preview.matched) {
+        signatures.add(
+          '${preview.candidateType}|${preview.amountSatang}|${preview.accountId}|${preview.categoryId}',
+        );
+      }
+    }
+    return signatures;
   }
 
   @override
@@ -649,6 +814,156 @@ final class SqliteFinanceRepository
       transactions: targets.$1,
       scheduledEvents: targets.$2,
     );
+  }
+
+  @override
+  Future<TransferCorrelationResult> correlateCandidate(
+    String candidateId,
+  ) async {
+    final results = _correlatePendingCandidatesSync();
+    return results
+            .where((item) => item.candidateId == candidateId)
+            .firstOrNull ??
+        TransferCorrelationResult(
+          candidateId: candidateId,
+          kind: TransferCorrelationKind.noCorrelation,
+        );
+  }
+
+  @override
+  Future<List<TransferCorrelationResult>> correlatePendingCandidates() async =>
+      _correlatePendingCandidatesSync();
+
+  @override
+  Future<CandidateResolutionResult> confirmCorrelatedTransfer(
+    TransferCorrelationResult correlation, {
+    bool failAfterTransferOut = false,
+    bool failBeforeCandidateUpdates = false,
+  }) async {
+    late CandidateResolutionResult result;
+    _atomic(() {
+      final pairedId = correlation.pairedCandidateId;
+      if (pairedId == null) throw StateError('ไม่พบคู่รายการโอน');
+      final rows = query(
+        '''SELECT * FROM transaction_candidates
+           WHERE profile_id=? AND id IN (?,?) AND deleted_at IS NULL''',
+        [activeProfileId, correlation.candidateId, pairedId],
+      );
+      if (rows.length != 2) throw StateError('คู่รายการเปลี่ยนไปแล้ว');
+      final pending = rows
+          .where((row) => row['review_status'] == 'pending_review')
+          .length;
+      if (pending == 0) {
+        final first = _alreadyResolvedCandidate(rows.first);
+        final second = _alreadyResolvedCandidate(rows.last);
+        if (first == null || second == null) {
+          throw StateError('ผลการยืนยันเดิมไม่สมบูรณ์');
+        }
+        result = CandidateResolutionResult(
+          status: first.status,
+          transactionId: first.transactionId,
+          scheduledEventId: first.scheduledEventId,
+          createdFinancialRecord: false,
+        );
+        return;
+      }
+      if (pending != 2) throw StateError('คู่รายการถูกดำเนินการไปบางส่วนแล้ว');
+
+      final current = _correlatePendingCandidatesSync()
+          .where((item) => item.candidateId == correlation.candidateId)
+          .firstOrNull;
+      if (current == null ||
+          current.pairedCandidateId != pairedId ||
+          current.kind != correlation.kind ||
+          current.sourceAccountId != correlation.sourceAccountId ||
+          current.destinationAccountId != correlation.destinationAccountId ||
+          current.amountSatang != correlation.amountSatang ||
+          current.transferGroupId != correlation.transferGroupId ||
+          current.scheduledEventId != correlation.scheduledEventId) {
+        throw StateError('คำแนะนำเปลี่ยนไปแล้ว กรุณารีเฟรช');
+      }
+
+      String? groupId;
+      var created = false;
+      if (current.kind == TransferCorrelationKind.existingTransfer) {
+        groupId = current.transferGroupId;
+        if (groupId == null ||
+            !_validExistingCorrelationTransfer(current, groupId)) {
+          throw StateError('รายการโอนที่บันทึกไว้เปลี่ยนไปแล้ว');
+        }
+      } else if (current.kind == TransferCorrelationKind.scheduledTransfer) {
+        final eventId = current.scheduledEventId;
+        if (eventId == null) throw StateError('รายการโอนล่วงหน้าเปลี่ยนไปแล้ว');
+        groupId = _confirmScheduledTransferSync(
+          eventId,
+          occurredAt: _correlationOccurredAt(rows),
+        );
+        created = true;
+      } else if (current.kind == TransferCorrelationKind.likelyTransferPair) {
+        _validateTransferAccounts(
+          current.sourceAccountId!,
+          current.destinationAccountId,
+        );
+        groupId = _uuid.v4();
+        final occurredAt = _correlationOccurredAt(rows);
+        _insertTransaction(
+          accountId: current.sourceAccountId!,
+          type: 'transfer_out',
+          amount: current.amountSatang,
+          transferGroupId: groupId,
+          source: 'notification_correlation',
+          occurredAt: occurredAt,
+        );
+        if (failAfterTransferOut) {
+          throw StateError('Injected failure after transfer out');
+        }
+        _insertTransaction(
+          accountId: current.destinationAccountId!,
+          type: 'transfer_in',
+          amount: current.amountSatang,
+          transferGroupId: groupId,
+          source: 'notification_correlation',
+          occurredAt: occurredAt,
+        );
+        created = true;
+      } else {
+        throw StateError('คำแนะนำนี้ยังยืนยันเป็นการโอนไม่ได้');
+      }
+      if (failBeforeCandidateUpdates) {
+        throw StateError('Injected failure before candidate updates');
+      }
+      final status = current.kind == TransferCorrelationKind.existingTransfer
+          ? 'matched_existing'
+          : 'confirmed_new';
+      for (final id in [correlation.candidateId, pairedId]) {
+        _finishCandidate(
+          id,
+          status: status,
+          scheduledEventId: current.scheduledEventId,
+        );
+        _audit(
+          'transaction_candidate',
+          id,
+          'update',
+          metadata: {
+            'action': 'confirmed_correlated_transfer',
+            'pairedCandidateId': id == correlation.candidateId
+                ? pairedId
+                : correlation.candidateId,
+            'transferGroupId': groupId,
+            if (current.scheduledEventId != null)
+              'scheduledEventId': current.scheduledEventId,
+          },
+        );
+      }
+      result = CandidateResolutionResult(
+        status: status,
+        transferGroupId: groupId,
+        scheduledEventId: current.scheduledEventId,
+        createdFinancialRecord: created,
+      );
+    });
+    return result;
   }
 
   @override
@@ -1430,6 +1745,244 @@ final class SqliteFinanceRepository
     if (database.updatedRows != 1) {
       throw StateError('รายการนี้ถูกดำเนินการไปแล้ว');
     }
+  }
+
+  List<TransferCorrelationResult> _correlatePendingCandidatesSync() {
+    final matchCandidates = _matchingCandidates();
+    if (matchCandidates.isEmpty) return const [];
+    final input = matchCandidates
+        .map(
+          (item) => TransferCorrelationCandidate(
+            id: item.id,
+            profileId: item.profileId,
+            type: item.type,
+            amountSatang: item.amountSatang,
+            occurredAt: item.occurredAt,
+            pending: true,
+            accountId: item.accountId,
+            referenceNo: item.referenceNo,
+          ),
+        )
+        .toList(growable: false);
+    final raw = const TransferCorrelationEngine().correlate(input);
+    final byId = {for (final item in matchCandidates) item.id: item};
+    final t15Targets = _matchingTargets(matchCandidates);
+    final t15 = {
+      for (final item in matchCandidates)
+        item.id: const CandidateMatchingEngine().match(
+          item,
+          transactions: t15Targets.$1,
+          scheduledEvents: t15Targets.$2,
+        ),
+    };
+    final decorated = <String, TransferCorrelationResult>{};
+    for (final item in raw) {
+      if (decorated.containsKey(item.candidateId)) continue;
+      final pairedId = item.pairedCandidateId;
+      if (pairedId == null ||
+          item.kind != TransferCorrelationKind.likelyTransferPair) {
+        decorated[item.candidateId] = item;
+        continue;
+      }
+      final pair = byId[pairedId];
+      final candidate = byId[item.candidateId];
+      if (pair == null || candidate == null) {
+        decorated[item.candidateId] = item;
+        continue;
+      }
+      final outgoing = candidate.type == 'expense' ? candidate : pair;
+      final incoming = candidate.type == 'income' ? candidate : pair;
+      final existingGroups = _matchingExistingTransferGroups(
+        outgoing,
+        incoming,
+      );
+      final scheduledIds = _matchingScheduledTransfers(outgoing, incoming);
+      TransferCorrelationResult selected;
+      if (existingGroups.length > 1 || scheduledIds.length > 1) {
+        selected = _correlationPairResult(
+          item,
+          TransferCorrelationKind.ambiguous,
+          reasons: const ['multiple_financial_targets'],
+        );
+      } else if (existingGroups.length == 1) {
+        selected = _correlationPairResult(
+          item,
+          TransferCorrelationKind.existingTransfer,
+          transferGroupId: existingGroups.single,
+          reasons: const ['existing_transfer_pair'],
+        );
+      } else if (scheduledIds.length == 1) {
+        selected = _correlationPairResult(
+          item,
+          TransferCorrelationKind.scheduledTransfer,
+          scheduledEventId: scheduledIds.single,
+          reasons: const ['scheduled_transfer_match'],
+        );
+      } else {
+        final candidateT15 = t15[candidate.id]!;
+        final pairT15 = t15[pair.id]!;
+        final hasStrongerT15 = {candidateT15.kind, pairT15.kind}.any(
+          (kind) =>
+              kind == CandidateMatchKind.existingTransactionMatch ||
+              kind == CandidateMatchKind.scheduledMatch ||
+              kind == CandidateMatchKind.ambiguous,
+        );
+        selected = hasStrongerT15
+            ? _correlationPairResult(
+                item,
+                TransferCorrelationKind.noCorrelation,
+                reasons: const ['stronger_t15_match'],
+              )
+            : item;
+      }
+      decorated[item.candidateId] = selected;
+      decorated[pairedId] = TransferCorrelationResult(
+        candidateId: pairedId,
+        pairedCandidateId: item.candidateId,
+        kind: selected.kind,
+        sourceAccountId: selected.sourceAccountId,
+        destinationAccountId: selected.destinationAccountId,
+        amountSatang: selected.amountSatang,
+        timeDelta: selected.timeDelta,
+        reasonCodes: selected.reasonCodes,
+        transferGroupId: selected.transferGroupId,
+        scheduledEventId: selected.scheduledEventId,
+      );
+    }
+    return raw
+        .map((item) => decorated[item.candidateId] ?? item)
+        .toList(growable: false);
+  }
+
+  TransferCorrelationResult _correlationPairResult(
+    TransferCorrelationResult base,
+    TransferCorrelationKind kind, {
+    required List<String> reasons,
+    String? transferGroupId,
+    String? scheduledEventId,
+  }) => TransferCorrelationResult(
+    candidateId: base.candidateId,
+    pairedCandidateId: base.pairedCandidateId,
+    kind: kind,
+    sourceAccountId: base.sourceAccountId,
+    destinationAccountId: base.destinationAccountId,
+    amountSatang: base.amountSatang,
+    timeDelta: base.timeDelta,
+    reasonCodes: [...reasons, ...base.reasonCodes],
+    transferGroupId: transferGroupId,
+    scheduledEventId: scheduledEventId,
+  );
+
+  List<String> _matchingExistingTransferGroups(
+    MatchCandidate outgoing,
+    MatchCandidate incoming,
+  ) {
+    final from = outgoing.occurredAt
+        .subtract(TransferCorrelationPolicy.window)
+        .toIso8601String();
+    final to = outgoing.occurredAt
+        .add(TransferCorrelationPolicy.window)
+        .toIso8601String();
+    final rows = query(
+      '''SELECT transfer_group_id,account_id,type,amount_satang,occurred_at
+         FROM transactions WHERE profile_id=? AND transfer_group_id IS NOT NULL
+           AND status='confirmed' AND deleted_at IS NULL AND occurred_at BETWEEN ? AND ?
+         ORDER BY occurred_at,id''',
+      [activeProfileId, from, to],
+    );
+    final groups = <String, List<Map<String, Object?>>>{};
+    for (final row in rows) {
+      groups.putIfAbsent(row['transfer_group_id'] as String, () => []).add(row);
+    }
+    return groups.entries
+        .where((entry) {
+          final pair = entry.value;
+          return pair.length == 2 &&
+              pair.any(
+                (row) =>
+                    row['type'] == 'transfer_out' &&
+                    row['account_id'] == outgoing.accountId &&
+                    row['amount_satang'] == outgoing.amountSatang &&
+                    DateTime.parse(
+                          row['occurred_at'] as String,
+                        ).difference(outgoing.occurredAt).abs() <=
+                        TransferCorrelationPolicy.window,
+              ) &&
+              pair.any(
+                (row) =>
+                    row['type'] == 'transfer_in' &&
+                    row['account_id'] == incoming.accountId &&
+                    row['amount_satang'] == incoming.amountSatang &&
+                    DateTime.parse(
+                          row['occurred_at'] as String,
+                        ).difference(incoming.occurredAt).abs() <=
+                        TransferCorrelationPolicy.window,
+              );
+        })
+        .map((entry) => entry.key)
+        .toList(growable: false);
+  }
+
+  List<String> _matchingScheduledTransfers(
+    MatchCandidate outgoing,
+    MatchCandidate incoming,
+  ) => query(
+    '''SELECT id FROM scheduled_financial_events
+       WHERE profile_id=? AND event_type='transfer' AND stored_status='scheduled'
+         AND account_id=? AND destination_account_id=? AND amount_satang=?
+         AND deleted_at IS NULL AND scheduled_at BETWEEN ? AND ?
+       ORDER BY scheduled_at,id''',
+    [
+      activeProfileId,
+      outgoing.accountId,
+      incoming.accountId,
+      outgoing.amountSatang,
+      outgoing.occurredAt
+          .subtract(CandidateMatchingPolicy.scheduledEventWindow)
+          .toIso8601String(),
+      outgoing.occurredAt
+          .add(CandidateMatchingPolicy.scheduledEventWindow)
+          .toIso8601String(),
+    ],
+  ).map((row) => row['id'] as String).toList(growable: false);
+
+  bool _validExistingCorrelationTransfer(
+    TransferCorrelationResult correlation,
+    String groupId,
+  ) {
+    final pair = query(
+      '''SELECT account_id,type,amount_satang FROM transactions
+         WHERE profile_id=? AND transfer_group_id=? AND status='confirmed'
+           AND deleted_at IS NULL''',
+      [activeProfileId, groupId],
+    );
+    return pair.length == 2 &&
+        pair.any(
+          (row) =>
+              row['type'] == 'transfer_out' &&
+              row['account_id'] == correlation.sourceAccountId &&
+              row['amount_satang'] == correlation.amountSatang,
+        ) &&
+        pair.any(
+          (row) =>
+              row['type'] == 'transfer_in' &&
+              row['account_id'] == correlation.destinationAccountId &&
+              row['amount_satang'] == correlation.amountSatang,
+        );
+  }
+
+  DateTime _correlationOccurredAt(List<Map<String, Object?>> rows) {
+    final values =
+        rows
+            .map((row) => DateTime.parse(row['occurred_at'] as String).toUtc())
+            .toList()
+          ..sort();
+    return DateTime.fromMillisecondsSinceEpoch(
+      (values.first.millisecondsSinceEpoch +
+              values.last.millisecondsSinceEpoch) ~/
+          2,
+      isUtc: true,
+    );
   }
 
   List<MatchCandidate> _matchingCandidates({String? id}) => database

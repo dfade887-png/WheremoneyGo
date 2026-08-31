@@ -24,6 +24,7 @@ import '../../domain/notification_rule_parser.dart';
 import '../../domain/candidate_matching.dart';
 import '../../domain/candidate_review.dart';
 import '../../domain/transfer_correlation.dart';
+import '../candidate_notification_service.dart';
 import '../local/migration_runner.dart';
 import '../local/schema_v5.dart';
 
@@ -39,7 +40,9 @@ final class SqliteFinanceRepository
         NotificationRuleRepository,
         CandidateMatchingRepository,
         CandidateReviewRepository,
-        TransferCorrelationRepository {
+        TransferCorrelationRepository,
+        ProcessRawNotificationRepository,
+        CandidateCreationInspector {
   SqliteFinanceRepository._(this.database);
 
   factory SqliteFinanceRepository.memory() {
@@ -788,6 +791,25 @@ final class SqliteFinanceRepository
       );
     });
     return candidateId;
+  }
+
+  @override
+  Future<bool> hasCandidateForRawEvent(String rawEventId) async => query(
+    '''SELECT ce.candidate_id FROM candidate_evidence ce
+           JOIN transaction_candidates c ON c.id=ce.candidate_id
+           WHERE ce.notification_event_id=? AND c.profile_id=? AND c.deleted_at IS NULL''',
+    [rawEventId, activeProfileId],
+  ).isNotEmpty;
+
+  @override
+  Future<Map<String, Object?>?> candidateNotificationDetails(String id) async {
+    final rows = query(
+      '''SELECT c.candidate_type, c.amount_satang, a.name account_name
+         FROM transaction_candidates c LEFT JOIN accounts a ON a.id=c.account_id
+         WHERE c.id=? AND c.profile_id=? AND c.deleted_at IS NULL''',
+      [id, activeProfileId],
+    );
+    return rows.firstOrNull;
   }
 
   @override

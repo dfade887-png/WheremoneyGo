@@ -6,6 +6,12 @@ import io.flutter.embedding.engine.FlutterEngine
 class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        NotificationCapturePlugin.register(applicationContext, flutterEngine)
+        NotificationCapturePlugin.register(this, flutterEngine)
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        NotificationCapturePlugin.updateIntent(intent)
     }
 }

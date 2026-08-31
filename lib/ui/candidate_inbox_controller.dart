@@ -2,12 +2,19 @@ import 'package:flutter/foundation.dart';
 
 import '../domain/candidate_review.dart';
 import '../domain/transfer_correlation.dart';
+import '../data/candidate_notification_service.dart';
 
 final class CandidateInboxController extends ChangeNotifier {
-  CandidateInboxController(this.repository, {this.onFinancialChange});
+  CandidateInboxController(
+    this.repository, {
+    this.onFinancialChange,
+    CandidateNotificationService? notificationService,
+  }) : notificationService =
+           notificationService ?? AndroidCandidateNotificationService();
 
   final CandidateReviewRepository repository;
   final Future<void> Function()? onFinancialChange;
+  final CandidateNotificationService notificationService;
   final Set<String> _rejectedCorrelationPairs = {};
   List<CandidateReviewItem> pendingCandidates = const [];
   Map<String, TransferCorrelationResult> correlations = const {};
@@ -121,6 +128,12 @@ final class CandidateInboxController extends ChangeNotifier {
     try {
       final resolution = await (repository as TransferCorrelationRepository)
           .confirmCorrelatedTransfer(result);
+      await notificationService.cancelCandidateNotification(result.candidateId);
+      if (result.pairedCandidateId != null) {
+        await notificationService.cancelCandidateNotification(
+          result.pairedCandidateId!,
+        );
+      }
       if (resolution.createdFinancialRecord) await onFinancialChange?.call();
       await load();
       return true;
@@ -149,6 +162,7 @@ final class CandidateInboxController extends ChangeNotifier {
     notifyListeners();
     try {
       final result = await action();
+      await notificationService.cancelCandidateNotification(candidate.id);
       if (result.createdFinancialRecord) await onFinancialChange?.call();
       selectedCandidate = null;
       alternatives = const [];

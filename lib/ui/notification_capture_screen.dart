@@ -24,6 +24,7 @@ class _NotificationCaptureScreenState extends State<NotificationCaptureScreen>
     with WidgetsBindingObserver {
   late final bridge = widget.bridge ?? NotificationCaptureBridge();
   bool access = false;
+  bool appNotifications = false;
   bool loading = true;
   List<NotificationSource> sources = const [];
   String? error;
@@ -55,6 +56,7 @@ class _NotificationCaptureScreenState extends State<NotificationCaptureScreen>
       final repository = widget.state.financeRepository;
       final configured = await repository.notificationSources();
       final granted = await bridge.hasAccess();
+      final appGranted = await bridge.hasPostNotificationsPermission();
       await NotificationCaptureCoordinator(
         repository,
         bridge,
@@ -63,6 +65,7 @@ class _NotificationCaptureScreenState extends State<NotificationCaptureScreen>
       if (mounted) {
         setState(() {
           access = granted;
+          appNotifications = appGranted;
           sources = configured;
         });
       }
@@ -127,6 +130,27 @@ class _NotificationCaptureScreenState extends State<NotificationCaptureScreen>
               FilledButton(
                 onPressed: bridge.openAccessSettings,
                 child: const Text('เปิดการตั้งค่า'),
+              ),
+              const SizedBox(height: 12),
+              ListTile(
+                leading: Icon(
+                  appNotifications
+                      ? Icons.notifications_active_outlined
+                      : Icons.notifications_off_outlined,
+                  color: appNotifications ? Colors.green : AppColors.orange,
+                ),
+                title: const Text('แจ้งเตือนจากเงินกูไปไหน'),
+                subtitle: Text(
+                  appNotifications ? 'อนุญาตแล้ว' : 'ยังไม่ได้อนุญาต',
+                ),
+              ),
+              OutlinedButton(
+                onPressed: appNotifications
+                    ? bridge.openAppNotificationSettings
+                    : bridge.requestPostNotifications,
+                child: Text(
+                  appNotifications ? 'ตั้งค่าแจ้งเตือน' : 'อนุญาตการแจ้งเตือน',
+                ),
               ),
               const SizedBox(height: 20),
               Text(

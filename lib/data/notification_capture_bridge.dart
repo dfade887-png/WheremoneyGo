@@ -1,6 +1,9 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/services.dart';
 
 import '../domain/notification_capture.dart';
+import 'candidate_notification_service.dart';
 
 final class NotificationCaptureBridge {
   NotificationCaptureBridge({MethodChannel? channel})
@@ -15,6 +18,23 @@ final class NotificationCaptureBridge {
 
   Future<void> openAccessSettings() =>
       _channel.invokeMethod<void>('openNotificationAccess');
+
+  Future<bool> hasPostNotificationsPermission() async => !Platform.isAndroid
+      ? false
+      : await _channel.invokeMethod<bool>('hasPostNotificationsPermission') ??
+            false;
+
+  Future<void> requestPostNotifications() => Platform.isAndroid
+      ? _channel.invokeMethod<void>('requestPostNotifications')
+      : Future.value();
+
+  Future<void> openAppNotificationSettings() => Platform.isAndroid
+      ? _channel.invokeMethod<void>('openAppNotificationSettings')
+      : Future.value();
+
+  Future<String?> consumeLaunchCandidate() => Platform.isAndroid
+      ? _channel.invokeMethod<String>('consumeLaunchCandidate')
+      : Future.value();
 
   Future<void> syncConfiguration({
     required String profileId,
@@ -61,12 +81,15 @@ final class NotificationCaptureCoordinator {
   NotificationCaptureCoordinator(
     this._repository,
     this._bridge,
-    this._activeProfileId,
-  );
+    this._activeProfileId, {
+    CandidateNotificationService? notificationService,
+  }) : _notificationService =
+           notificationService ?? AndroidCandidateNotificationService();
 
   final NotificationCaptureRepository _repository;
   final NotificationCaptureBridge _bridge;
   final String Function() _activeProfileId;
+  final CandidateNotificationService _notificationService;
 
   Future<int> synchronizeAndDrain() async {
     final sources = await _repository.notificationSources();
@@ -77,8 +100,31 @@ final class NotificationCaptureCoordinator {
     var ingested = 0;
     final completed = <CapturedNotification>[];
     for (final event in await _bridge.readPending()) {
-      if (await _repository.ingestCapturedNotification(event) != null) {
+      final rawId = await _repository.ingestCapturedNotification(event);
+      if (rawId != null) {
         ingested++;
+        final inspector = _repository is CandidateCreationInspector
+            ? _repository as CandidateCreationInspector
+            : null;
+        final existed = inspector == null
+            ? true
+            : await inspector.hasCandidateForRawEvent(rawId);
+        if (!existed && _repository is ProcessRawNotificationRepository) {
+          final candidateId =
+              await (_repository as ProcessRawNotificationRepository)
+                  .processRawNotification(rawId);
+          if (candidateId != null) {
+            final details = await inspector.candidateNotificationDetails(
+              candidateId,
+            );
+            await _notificationService.notifyCandidateCreated(
+              candidateId: candidateId,
+              type: details?['candidate_type'] as String? ?? 'expense',
+              amountSatang: details?['amount_satang'] as int? ?? 0,
+              accountName: details?['account_name'] as String?,
+            );
+          }
+        }
         completed.add(event);
       }
     }

@@ -61,7 +61,10 @@ class _AppRouter extends StatelessWidget {
       AppStep.accounts => AccountScreen(state: state),
       AppStep.recurring => RecurringScreen(state: state),
       AppStep.saving => SavingScreen(state: state),
-      AppStep.dashboard => ProductionShell(state: state),
+      AppStep.dashboard => ProductionShell(
+        state: state,
+        initialIndex: state.notificationLaunchCandidateId == null ? 0 : 3,
+      ),
       AppStep.calendar => ProductionShell(state: state, initialIndex: 1),
     };
   }

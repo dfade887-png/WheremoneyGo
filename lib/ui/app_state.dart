@@ -1,10 +1,13 @@
-import 'package:flutter/foundation.dart';
+import 'dart:io' show Platform;
+
+import 'package:flutter/widgets.dart';
 import '../core/money.dart';
 import '../domain/models/financial_models.dart';
 import '../domain/financial_snapshot.dart' as projection;
 import '../domain/financial_calendar.dart';
 import '../domain/candidate_review.dart';
 import '../data/repositories/sqlite_finance_repository.dart';
+import '../data/notification_capture_bridge.dart';
 import 'local_finance_store.dart';
 
 enum AppStep {
@@ -29,7 +32,7 @@ final class FinanceSnapshot {
   final Money currentCash, dailyAllowance, forecast, foodSpent;
 }
 
-final class AppState extends ChangeNotifier {
+final class AppState extends ChangeNotifier with WidgetsBindingObserver {
   AppState({LocalFinanceStore? store}) {
     _store = store;
   }
@@ -59,6 +62,10 @@ final class AppState extends ChangeNotifier {
   List<FinancialCalendarEvent> dashboardUpcoming = const [];
   List<CandidateReviewItem> dashboardCandidates = const [];
   bool onboardingSubmitting = false;
+  String? notificationLaunchCandidateId;
+  bool _drainInProgress = false;
+  bool _drainRerunRequested = false;
+  bool _lifecycleDisposed = false;
 
   SqliteFinanceRepository get financeRepository {
     final store = _store;
@@ -71,6 +78,14 @@ final class AppState extends ChangeNotifier {
     notifyListeners();
     try {
       _store ??= await LocalFinanceStore.open();
+      if (Platform.isAndroid) {
+        try {
+          notificationLaunchCandidateId = await NotificationCaptureBridge()
+              .consumeLaunchCandidate();
+        } catch (_) {
+          // Older native builds may not expose the launch-intent channel.
+        }
+      }
       final profile = await _store!.loadProfile();
       if (profile != null) {
         payday = profile.payday;
@@ -95,10 +110,54 @@ final class AppState extends ChangeNotifier {
       await refreshDailyData();
       initialized = true;
       viewStatus = ViewStatus.ready;
+      WidgetsBinding.instance.addObserver(this);
+      _requestNotificationDrain();
     } catch (_) {
       viewStatus = ViewStatus.error;
     }
     notifyListeners();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && initialized) {
+      _requestNotificationDrain();
+    }
+  }
+
+  void _requestNotificationDrain() {
+    if (_lifecycleDisposed || !Platform.isAndroid || !initialized) return;
+    if (_drainInProgress) {
+      _drainRerunRequested = true;
+      return;
+    }
+    _drainInProgress = true;
+    Future<void>(() async {
+      try {
+        final repository = financeRepository;
+        await NotificationCaptureCoordinator(
+          repository,
+          NotificationCaptureBridge(),
+          () => _store!.activeProfileId,
+        ).synchronizeAndDrain();
+        await refreshDailyData();
+      } catch (_) {
+        // Lifecycle drain is best-effort; financial writes remain unaffected.
+      } finally {
+        _drainInProgress = false;
+        if (_drainRerunRequested && !_lifecycleDisposed) {
+          _drainRerunRequested = false;
+          _requestNotificationDrain();
+        }
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _lifecycleDisposed = true;
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
   }
 
   Future<void> completeOnboarding() async {

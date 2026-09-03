@@ -8,6 +8,8 @@ import '../domain/financial_calendar.dart';
 import '../domain/candidate_review.dart';
 import '../data/repositories/sqlite_finance_repository.dart';
 import '../data/notification_capture_bridge.dart';
+import '../data/slip_media_scanner.dart';
+import '../data/slip_media_lifecycle_gate.dart';
 import 'local_finance_store.dart';
 
 enum AppStep {
@@ -66,6 +68,8 @@ final class AppState extends ChangeNotifier with WidgetsBindingObserver {
   bool _drainInProgress = false;
   bool _drainRerunRequested = false;
   bool _lifecycleDisposed = false;
+  SlipMediaScanner? _slipScanner;
+  final SlipMediaLifecycleGate _slipLifecycleGate = SlipMediaLifecycleGate();
 
   SqliteFinanceRepository get financeRepository {
     final store = _store;
@@ -78,6 +82,10 @@ final class AppState extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
     try {
       _store ??= await LocalFinanceStore.open();
+      _slipScanner ??= SlipMediaScanner(
+        _store!.repository,
+        NotificationCaptureBridge(),
+      );
       if (Platform.isAndroid) {
         try {
           notificationLaunchCandidateId = await NotificationCaptureBridge()
@@ -112,6 +120,7 @@ final class AppState extends ChangeNotifier with WidgetsBindingObserver {
       viewStatus = ViewStatus.ready;
       WidgetsBinding.instance.addObserver(this);
       _requestNotificationDrain();
+      _requestSlipMediaScan();
     } catch (_) {
       viewStatus = ViewStatus.error;
     }
@@ -122,6 +131,7 @@ final class AppState extends ChangeNotifier with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && initialized) {
       _requestNotificationDrain();
+      _requestSlipMediaScan();
     }
   }
 
@@ -149,6 +159,75 @@ final class AppState extends ChangeNotifier with WidgetsBindingObserver {
           _drainRerunRequested = false;
           _requestNotificationDrain();
         }
+      }
+    });
+  }
+
+  void requestNotificationCaptureSync() => _requestNotificationDrain();
+
+  Future<bool> slipDetectionEnabled() =>
+      financeRepository.slipDetectionEnabled();
+
+  Future<String> slipImagePermissionState() =>
+      NotificationCaptureBridge().slipImagePermissionState();
+
+  Future<void> setSlipDetectionEnabled(bool enabled) async {
+    await financeRepository.setSlipDetectionEnabled(enabled);
+    if (enabled) {
+      await financeRepository.initializeSlipDetectionBaseline(
+        DateTime.now().toUtc(),
+      );
+      _requestSlipMediaScan();
+    }
+    notifyListeners();
+  }
+
+  /// Performs an on-demand metadata-only scan. It never writes financial data.
+  Future<int> scanSlipMediaNow() async {
+    final scanner = _slipScanner;
+    if (scanner == null) return 0;
+    if (_slipLifecycleGate.manualSelectionActive) {
+      _slipLifecycleGate.deferAutomaticScan();
+      return 0;
+    }
+    return scanner.scanIfEnabled(
+      allowStaging: () => _slipLifecycleGate.automaticStagingAllowed,
+    );
+  }
+
+  /// Opens Android's document picker. Only the URI explicitly selected by the
+  /// user is staged; no gallery-wide read is performed by this action.
+  Future<int> addSlipFromDevice() async {
+    _slipLifecycleGate.beginManualSelection();
+    try {
+      final items = await NotificationCaptureBridge().pickSlipImages();
+      if (items.isEmpty) return 0;
+      return (await financeRepository.stageNewSlipMedia(
+        items,
+        ingestionSource: 'manual',
+      )).length;
+    } finally {
+      // The picker-triggered resume is deliberately not scanned here. A later
+      // genuine resume scans from the unchanged automatic baseline.
+      _slipLifecycleGate.endManualSelection();
+    }
+  }
+
+  void _requestSlipMediaScan() {
+    if (_lifecycleDisposed || !Platform.isAndroid || !initialized) return;
+    if (_slipLifecycleGate.manualSelectionActive) {
+      _slipLifecycleGate.deferAutomaticScan();
+      return;
+    }
+    final scanner = _slipScanner;
+    if (scanner == null) return;
+    Future<void>(() async {
+      try {
+        await scanner.scanIfEnabled(
+          allowStaging: () => _slipLifecycleGate.automaticStagingAllowed,
+        );
+      } catch (_) {
+        // Slip discovery is best-effort and must never affect financial state.
       }
     });
   }

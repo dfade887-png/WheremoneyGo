@@ -20,6 +20,7 @@ import '../../domain/payday_calendar.dart';
 import '../../domain/salary_projection.dart';
 import '../../domain/transaction_lifecycle.dart';
 import '../../domain/notification_capture.dart';
+import '../../domain/slip_media.dart';
 import '../../domain/notification_rule_parser.dart';
 import '../../domain/candidate_matching.dart';
 import '../../domain/candidate_review.dart';
@@ -42,7 +43,8 @@ final class SqliteFinanceRepository
         CandidateReviewRepository,
         TransferCorrelationRepository,
         ProcessRawNotificationRepository,
-        CandidateCreationInspector {
+        CandidateCreationInspector,
+        SlipMediaRepository {
   SqliteFinanceRepository._(this.database);
 
   factory SqliteFinanceRepository.memory() {
@@ -92,7 +94,166 @@ final class SqliteFinanceRepository
 
   void _migrate() {
     MigrationRunner.migrateToLatest(database);
+    // T20 is additive and keeps the accepted schema/user_version at v5.
+    // This also upgrades existing v5 devices without a destructive migration.
+    database.execute(
+      SchemaV5.statements.firstWhere(
+        (statement) => statement.startsWith(
+          'CREATE TABLE IF NOT EXISTS slip_media_events',
+        ),
+      ),
+    );
+    try {
+      database.execute(
+        "ALTER TABLE slip_media_events ADD COLUMN ingestion_source TEXT NOT NULL DEFAULT 'automatic' CHECK(ingestion_source IN ('automatic','manual'))",
+      );
+    } catch (_) {
+      // Existing installations already have this additive T20.0.1 column.
+    }
+    database.execute(
+      SchemaV5.statements.firstWhere(
+        (statement) => statement.startsWith(
+          'CREATE INDEX IF NOT EXISTS slip_media_profile_status',
+        ),
+      ),
+    );
   }
+
+  static const _slipEnabledKey = 'slip_detection_enabled';
+  static const _slipBaselineKey = 'slip_detection_baseline_ms';
+
+  String? _profileSetting(String key) {
+    final rows = database.select(
+      'SELECT value FROM profile_settings WHERE profile_id=? AND key=? AND deleted_at IS NULL',
+      [activeProfileId, key],
+    );
+    return rows.isEmpty ? null : rows.single['value'] as String;
+  }
+
+  void _setProfileSetting(String key, String value) {
+    final now = DateTime.now().toUtc().toIso8601String();
+    database.execute(
+      '''INSERT INTO profile_settings(id,profile_id,key,value,created_at,updated_at)
+         VALUES(?,?,?,?,?,?) ON CONFLICT(profile_id,key) DO UPDATE SET
+         value=excluded.value,updated_at=excluded.updated_at,deleted_at=NULL''',
+      [_uuid.v4(), activeProfileId, key, value, now, now],
+    );
+  }
+
+  @override
+  Future<bool> slipDetectionEnabled() async =>
+      _profileSetting(_slipEnabledKey) == '1';
+
+  @override
+  Future<void> setSlipDetectionEnabled(bool enabled) async {
+    _setProfileSetting(_slipEnabledKey, enabled ? '1' : '0');
+  }
+
+  @override
+  Future<DateTime?> slipDetectionBaseline() async {
+    final value = _profileSetting(_slipBaselineKey);
+    final millis = value == null ? null : int.tryParse(value);
+    return millis == null
+        ? null
+        : DateTime.fromMillisecondsSinceEpoch(millis, isUtc: true);
+  }
+
+  @override
+  Future<void> initializeSlipDetectionBaseline(DateTime baseline) async {
+    if (_profileSetting(_slipBaselineKey) == null) {
+      _setProfileSetting(
+        _slipBaselineKey,
+        baseline.toUtc().millisecondsSinceEpoch.toString(),
+      );
+    }
+  }
+
+  @override
+  Future<List<SlipMediaEvent>> stageNewSlipMedia(
+    List<SlipMediaMetadata> media, {
+    String ingestionSource = 'automatic',
+  }) async {
+    if (!const {'automatic', 'manual'}.contains(ingestionSource)) {
+      throw ArgumentError.value(ingestionSource, 'ingestionSource');
+    }
+    if (!await slipDetectionEnabled()) return const [];
+    final baseline = await slipDetectionBaseline();
+    if (baseline == null) return const [];
+    final now = DateTime.now().toUtc();
+    final stagedIds = <String>[];
+    database.execute('BEGIN IMMEDIATE');
+    try {
+      for (final item in media) {
+        if (!item.supportedMimeType ||
+            (ingestionSource == 'automatic' &&
+                !item.dateAdded.isAfter(baseline))) {
+          continue;
+        }
+        final id = _uuid.v4();
+        database.execute(
+          '''INSERT OR IGNORE INTO slip_media_events(
+             id,profile_id,media_store_id,content_uri,mime_type,media_created_at,
+             discovered_at,status,ingestion_source,created_at,updated_at)
+             VALUES(?,?,?,?,?,?,?,'detected',?,?,?)''',
+          [
+            id,
+            activeProfileId,
+            item.mediaStoreId,
+            item.contentUri,
+            item.mimeType.toLowerCase(),
+            item.dateTaken?.toUtc().toIso8601String(),
+            now.toIso8601String(),
+            ingestionSource,
+            now.toIso8601String(),
+            now.toIso8601String(),
+          ],
+        );
+        final inserted = database.select(
+          'SELECT id FROM slip_media_events WHERE profile_id=? AND media_store_id=? AND content_uri=?',
+          [activeProfileId, item.mediaStoreId, item.contentUri],
+        );
+        if (inserted.isNotEmpty && inserted.single['id'] == id) {
+          stagedIds.add(id);
+        }
+      }
+      database.execute('COMMIT');
+    } catch (_) {
+      database.execute('ROLLBACK');
+      rethrow;
+    }
+    if (stagedIds.isEmpty) return const [];
+    return database
+        .select(
+          'SELECT * FROM slip_media_events WHERE id IN (${List.filled(stagedIds.length, '?').join(',')}) ORDER BY discovered_at,id',
+          stagedIds,
+        )
+        .map(_slipEventFromRow)
+        .toList(growable: false);
+  }
+
+  SlipMediaEvent _slipEventFromRow(Map<String, Object?> row) => SlipMediaEvent(
+    id: row['id'] as String,
+    profileId: row['profile_id'] as String,
+    mediaStoreId: row['media_store_id'] as String,
+    contentUri: row['content_uri'] as String,
+    contentHash: row['content_hash'] as String?,
+    mimeType: row['mime_type'] as String,
+    mediaCreatedAt: row['media_created_at'] == null
+        ? null
+        : DateTime.parse(row['media_created_at'] as String),
+    discoveredAt: DateTime.parse(row['discovered_at'] as String),
+    status: row['status'] as String,
+    ingestionSource: row['ingestion_source'] as String? ?? 'unknown',
+  );
+
+  @override
+  Future<List<SlipMediaEvent>> slipMediaEvents() async => database
+      .select(
+        'SELECT * FROM slip_media_events WHERE profile_id=? AND deleted_at IS NULL ORDER BY discovered_at,id',
+        [activeProfileId],
+      )
+      .map(_slipEventFromRow)
+      .toList(growable: false);
 
   void dispose() => database.close();
   void execute(String sql, [List<Object?> parameters = const []]) =>

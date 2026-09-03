@@ -3,6 +3,7 @@ import 'dart:io' show Platform;
 import 'package:flutter/services.dart';
 
 import '../domain/notification_capture.dart';
+import '../domain/slip_media.dart';
 import 'candidate_notification_service.dart';
 
 final class NotificationCaptureBridge {
@@ -35,6 +36,80 @@ final class NotificationCaptureBridge {
   Future<String?> consumeLaunchCandidate() => Platform.isAndroid
       ? _channel.invokeMethod<String>('consumeLaunchCandidate')
       : Future.value();
+
+  Future<bool> isPackageInstalled(String packageName) async {
+    if (!Platform.isAndroid) return false;
+    try {
+      return await _channel.invokeMethod<bool>('isPackageInstalled', {
+            'packageName': packageName,
+          }) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
+
+  Future<String> slipImagePermissionState() async {
+    if (!Platform.isAndroid) return 'unsupported';
+    try {
+      return await _channel.invokeMethod<String>('slipImagePermissionState') ??
+          'denied';
+    } on MissingPluginException {
+      return 'denied';
+    }
+  }
+
+  Future<String> requestSlipImagePermission() async {
+    if (!Platform.isAndroid) return 'unsupported';
+    try {
+      return await _channel.invokeMethod<String>(
+            'requestSlipImagePermission',
+          ) ??
+          'denied';
+    } on MissingPluginException {
+      return 'denied';
+    }
+  }
+
+  Future<List<SlipMediaMetadata>> scanNewSlipImages({
+    required DateTime after,
+  }) async {
+    if (!Platform.isAndroid) return const [];
+    try {
+      final rows =
+          await _channel.invokeListMethod<Object?>('scanNewSlipImages', {
+            'afterMillis': after.toUtc().millisecondsSinceEpoch,
+          }) ??
+          const [];
+      return rows
+          .map(
+            (row) => SlipMediaMetadata.fromPlatform(
+              Map<Object?, Object?>.from(row! as Map),
+            ),
+          )
+          .toList(growable: false);
+    } on MissingPluginException {
+      return const [];
+    }
+  }
+
+  Future<List<SlipMediaMetadata>> pickSlipImages() async {
+    if (!Platform.isAndroid) return const [];
+    try {
+      final rows =
+          await _channel.invokeListMethod<Object?>('pickSlipImages') ??
+          const [];
+      return rows
+          .map(
+            (row) => SlipMediaMetadata.fromPlatform(
+              Map<Object?, Object?>.from(row! as Map),
+            ),
+          )
+          .toList(growable: false);
+    } on MissingPluginException {
+      return const [];
+    }
+  }
 
   Future<void> syncConfiguration({
     required String profileId,

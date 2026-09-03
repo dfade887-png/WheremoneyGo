@@ -14,4 +14,10 @@ class MainActivity : FlutterActivity() {
         setIntent(intent)
         NotificationCapturePlugin.updateIntent(intent)
     }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        NotificationCapturePlugin.onActivityResult(this, requestCode, resultCode, data)
+    }
 }

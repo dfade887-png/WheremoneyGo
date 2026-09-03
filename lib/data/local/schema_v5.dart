@@ -151,6 +151,23 @@ abstract final class SchemaV5 {
        ON candidate_evidence(scheduled_event_id)
        WHERE scheduled_event_id IS NOT NULL''',
     'CREATE INDEX candidate_evidence_candidate ON candidate_evidence(candidate_id)',
+    '''CREATE TABLE IF NOT EXISTS slip_media_events(
+      id TEXT PRIMARY KEY,
+      profile_id TEXT NOT NULL REFERENCES financial_profiles(id),
+      media_store_id TEXT NOT NULL,
+      content_uri TEXT NOT NULL,
+      content_hash TEXT,
+      mime_type TEXT NOT NULL,
+      media_created_at TEXT,
+      discovered_at TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'detected' CHECK(status IN ('detected','ignored','processed','unsupported','failed')),
+      ingestion_source TEXT NOT NULL DEFAULT 'automatic' CHECK(ingestion_source IN ('automatic','manual')),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      deleted_at TEXT,
+      UNIQUE(profile_id,media_store_id,content_uri)
+    )''',
+    'CREATE INDEX IF NOT EXISTS slip_media_profile_status ON slip_media_events(profile_id,status,discovered_at)',
     'PRAGMA user_version = 5',
   ];
 }

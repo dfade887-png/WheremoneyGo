@@ -22,6 +22,7 @@ import '../../domain/transaction_lifecycle.dart';
 import '../../domain/notification_capture.dart';
 import '../../domain/slip_media.dart';
 import '../../domain/slip_parser.dart';
+import '../../domain/spending_gauge.dart';
 import '../../domain/notification_rule_parser.dart';
 import '../../domain/candidate_matching.dart';
 import '../../domain/candidate_review.dart';
@@ -76,6 +77,7 @@ final class SqliteFinanceRepository
     'installments',
     'commitment_occurrences',
     'period_budgets',
+    'category_monthly_budgets',
     'saving_goals',
     'salary_profiles',
     'payroll_deductions',
@@ -94,9 +96,8 @@ final class SqliteFinanceRepository
   ];
 
   void _migrate() {
-    MigrationRunner.migrateToLatest(database, includeV6: true);
-    // T20 is additive and keeps the accepted schema/user_version at v5.
-    // This also upgrades existing v5 devices without a destructive migration.
+    MigrationRunner.migrateToLatest(database, includeV6: true, includeV7: true);
+    // T20 and later additions upgrade existing devices without destructive migrations.
     database.execute(
       SchemaV5.statements.firstWhere(
         (statement) => statement.startsWith(
@@ -131,6 +132,70 @@ final class SqliteFinanceRepository
     return rows.isEmpty ? null : rows.single['value'] as String;
   }
 
+  /// Derived from confirmed ledger rows; never persisted as a second total.
+  Future<List<SpendingGauge>> monthlySpendingGauges(DateTime month) async {
+    final start = DateTime(month.year, month.month).toUtc().toIso8601String();
+    final end = DateTime(month.year, month.month + 1).toUtc().toIso8601String();
+    final rows = query(
+      '''SELECT c.id,c.name,c.icon_key,c.color_value,
+          COALESCE(b.monthly_budget_satang,0) budget_satang,
+          COALESCE(SUM(CASE
+            WHEN t.status='confirmed' AND t.deleted_at IS NULL AND t.type='expense' THEN t.amount_satang
+            WHEN t.status='confirmed' AND t.deleted_at IS NULL AND t.type='refund' THEN -t.amount_satang
+            ELSE 0 END),0) used_satang
+         FROM categories c
+         LEFT JOIN category_monthly_budgets b ON b.category_id=c.id AND b.profile_id=c.profile_id AND b.deleted_at IS NULL
+         LEFT JOIN transactions t ON t.category_id=c.id AND t.profile_id=c.profile_id AND t.occurred_at>=? AND t.occurred_at<?
+         WHERE c.profile_id=? AND c.category_type='expense' AND c.deleted_at IS NULL AND c.archived_at IS NULL
+         GROUP BY c.id HAVING budget_satang>0 OR used_satang<>0
+         ORDER BY CASE WHEN budget_satang>0 AND used_satang>=budget_satang THEN 0 ELSE 1 END,
+                  CASE WHEN budget_satang>0 THEN CAST(used_satang AS REAL)/budget_satang ELSE -1 END DESC,c.name''',
+      [start, end, activeProfileId],
+    );
+    return rows
+        .map(
+          (row) => SpendingGauge(
+            categoryId: row['id'] as String,
+            name: row['name'] as String,
+            iconKey: row['icon_key'] as String?,
+            colorValue: row['color_value'] as int?,
+            usedSatang: row['used_satang'] as int,
+            budgetSatang: row['budget_satang'] as int,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  Future<void> setCategoryMonthlyBudget(
+    String categoryId,
+    int amountSatang,
+  ) async {
+    if (amountSatang <= 0) throw ArgumentError.value(amountSatang);
+    final exists = query(
+      'SELECT id FROM categories WHERE id=? AND profile_id=? AND category_type=\'expense\' AND deleted_at IS NULL',
+      [categoryId, activeProfileId],
+    );
+    if (exists.isEmpty) throw StateError('Expense category unavailable');
+    final now = DateTime.now().toUtc().toIso8601String();
+    database.execute(
+      '''INSERT INTO category_monthly_budgets(id,profile_id,category_id,monthly_budget_satang,created_at,updated_at,deleted_at)
+      VALUES(?,?,?,?,?,?,NULL) ON CONFLICT(profile_id,category_id) DO UPDATE SET monthly_budget_satang=excluded.monthly_budget_satang,updated_at=excluded.updated_at,deleted_at=NULL''',
+      [_uuid.v4(), activeProfileId, categoryId, amountSatang, now, now],
+    );
+  }
+
+  Future<void> removeCategoryMonthlyBudget(String categoryId) async {
+    database.execute(
+      'UPDATE category_monthly_budgets SET deleted_at=?,updated_at=? WHERE profile_id=? AND category_id=? AND deleted_at IS NULL',
+      [
+        DateTime.now().toUtc().toIso8601String(),
+        DateTime.now().toUtc().toIso8601String(),
+        activeProfileId,
+        categoryId,
+      ],
+    );
+  }
+
   void _setProfileSetting(String key, String value) {
     final now = DateTime.now().toUtc().toIso8601String();
     database.execute(
@@ -139,6 +204,12 @@ final class SqliteFinanceRepository
          value=excluded.value,updated_at=excluded.updated_at,deleted_at=NULL''',
       [_uuid.v4(), activeProfileId, key, value, now, now],
     );
+  }
+
+  Future<String?> appearanceSetting(String key) async => _profileSetting(key);
+
+  Future<void> setAppearanceSetting(String key, String value) async {
+    _setProfileSetting(key, value);
   }
 
   @override
@@ -4614,6 +4685,7 @@ final class SqliteFinanceRepository
         'commitment_occurrences',
         'transactions',
         'period_budgets',
+        'category_monthly_budgets',
         'budget_periods',
         'payroll_deductions',
         'salary_profiles',

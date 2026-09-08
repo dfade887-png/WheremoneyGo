@@ -142,7 +142,13 @@ final class LocalFinanceStore {
     required String name,
     required String type,
     required String iconKey,
-  }) => repository.createCategory(name: name, type: type, iconKey: iconKey);
+    int? colorValue,
+  }) => repository.createCategory(
+    name: name,
+    type: type,
+    iconKey: iconKey,
+    colorValue: colorValue,
+  );
 
   Future<String> addTransaction({
     required String accountId,

@@ -295,7 +295,7 @@ class _FinancialCalendarScreenState extends State<FinancialCalendarScreen> {
               const SizedBox(height: 12),
               const Text(
                 'รายการนี้ยังไม่ถึงกำหนด ต้องการยืนยันว่าเกิดขึ้นแล้วหรือไม่?',
-                style: TextStyle(color: AppColors.orange),
+                style: TextStyle(color: FinancialColors.warning),
               ),
             ],
           ],
@@ -377,7 +377,9 @@ class _MonthGrid extends StatelessWidget {
                 child: Center(
                   child: Text(
                     name,
-                    style: const TextStyle(color: AppColors.muted),
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
                   ),
                 ),
               ),
@@ -446,8 +448,14 @@ class _DayCell extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(5),
         decoration: BoxDecoration(
-          color: selected ? AppColors.mintSoft : Colors.white,
-          border: Border.all(color: selected ? AppColors.mint : AppColors.line),
+          color: selected
+              ? Theme.of(context).colorScheme.primaryContainer
+              : Theme.of(context).colorScheme.surfaceContainerLow,
+          border: Border.all(
+            color: selected
+                ? Theme.of(context).colorScheme.primary
+                : Theme.of(context).colorScheme.outlineVariant,
+          ),
           borderRadius: BorderRadius.circular(12),
         ),
         child: Stack(
@@ -475,7 +483,7 @@ class _DayCell extends StatelessWidget {
                   '!',
                   key: Key('due-indicator'),
                   style: TextStyle(
-                    color: AppColors.red,
+                    color: FinancialColors.overBudget,
                     fontWeight: FontWeight.w900,
                   ),
                 ),
@@ -496,7 +504,7 @@ class _DayCell extends StatelessWidget {
                           '+${_compact(incoming)}',
                           style: const TextStyle(
                             fontSize: 10,
-                            color: AppColors.violet,
+                            color: FinancialColors.income,
                           ),
                         ),
                       if (incoming > 0 && outgoing > 0)
@@ -506,7 +514,7 @@ class _DayCell extends StatelessWidget {
                           '-${_compact(outgoing)}',
                           style: const TextStyle(
                             fontSize: 10,
-                            color: AppColors.red,
+                            color: FinancialColors.expense,
                           ),
                         ),
                       if (transfer) ...[
@@ -514,7 +522,7 @@ class _DayCell extends StatelessWidget {
                         const Icon(
                           Icons.swap_horiz_rounded,
                           size: 12,
-                          color: AppColors.blue,
+                          color: FinancialColors.transfer,
                         ),
                       ],
                     ],
@@ -588,7 +596,9 @@ class _BalanceCard extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.all(14),
     decoration: BoxDecoration(
-      color: authoritative ? AppColors.ink : const Color(0xFF403343),
+      color: authoritative
+          ? Theme.of(context).colorScheme.primaryContainer
+          : Theme.of(context).colorScheme.surfaceContainerHigh,
       borderRadius: BorderRadius.circular(16),
     ),
     child: Column(
@@ -596,15 +606,24 @@ class _BalanceCard extends StatelessWidget {
       children: [
         Text(
           label,
-          style: const TextStyle(color: Color(0xFFB7C2C5), fontSize: 12),
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+            fontSize: 12,
+          ),
         ),
         const SizedBox(height: 6),
         if (value == null)
-          const Text('—', style: TextStyle(color: Colors.white, fontSize: 18))
+          Text(
+            '—',
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.onSurface,
+              fontSize: 18,
+            ),
+          )
         else
           FinanceAmountText(
             satang: value!,
-            color: Colors.white,
+            color: Theme.of(context).colorScheme.onSurface,
             style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
           ),
       ],
@@ -639,8 +658,8 @@ class _EventCard extends StatelessWidget {
       key: Key('calendar-event-${event.id}'),
       margin: const EdgeInsets.only(bottom: 8),
       color: event.actuality == FinancialCalendarActuality.planned
-          ? const Color(0xFFFFFBFC)
-          : Colors.white,
+          ? Theme.of(context).colorScheme.surfaceContainerLow
+          : Theme.of(context).colorScheme.surface,
       child: Padding(
         padding: const EdgeInsets.all(14),
         child: Column(
@@ -660,8 +679,8 @@ class _EventCard extends StatelessWidget {
                       ),
                       Text(
                         event.isTransfer ? '$source → $destination' : source,
-                        style: const TextStyle(
-                          color: AppColors.muted,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
                           fontSize: 12,
                         ),
                       ),
@@ -690,8 +709,8 @@ class _EventCard extends StatelessWidget {
                   key: event.isActionRequired ? const Key('due-label') : null,
                   style: TextStyle(
                     color: event.isActionRequired
-                        ? AppColors.red
-                        : AppColors.muted,
+                        ? FinancialColors.overBudget
+                        : Theme.of(context).colorScheme.onSurfaceVariant,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -851,7 +870,7 @@ IconData _eventIcon(FinancialCalendarEvent event) => switch (event.eventType) {
   FinancialCalendarEventType.transfer => Icons.swap_horiz_rounded,
 };
 Color _eventColor(FinancialCalendarEvent event) => switch (event.direction) {
-  FinancialCalendarDirection.incoming => AppColors.violet,
-  FinancialCalendarDirection.outgoing => AppColors.red,
-  FinancialCalendarDirection.transfer => AppColors.blue,
+  FinancialCalendarDirection.incoming => FinancialColors.income,
+  FinancialCalendarDirection.outgoing => FinancialColors.expense,
+  FinancialCalendarDirection.transfer => FinancialColors.transfer,
 };

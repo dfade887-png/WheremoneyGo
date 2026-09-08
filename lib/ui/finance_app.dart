@@ -4,13 +4,14 @@ import '../core/money.dart';
 import '../domain/models/financial_models.dart';
 import '../domain/payday_calendar.dart';
 import '../domain/financial_calendar.dart';
+import '../domain/spending_gauge.dart';
+import '../domain/spending_gauge_ranking.dart';
 import 'app_state.dart';
 import 'theme/app_theme.dart';
 import 'daily_driver_screen.dart';
 import 'finance_components.dart';
 import 'local_finance_store.dart';
 import 'production_shell.dart';
-import 'candidate_inbox_screen.dart';
 
 class FinanceApp extends StatefulWidget {
   const FinanceApp({this.state, super.key});
@@ -35,13 +36,15 @@ class _FinanceAppState extends State<FinanceApp> {
   }
 
   @override
-  Widget build(BuildContext context) => MaterialApp(
-    debugShowCheckedModeBanner: false,
-    title: 'เงินกูไปไหน',
-    theme: AppTheme.light,
-    home: ListenableBuilder(
-      listenable: state,
-      builder: (context, child) => _AppRouter(state: state),
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: state,
+    builder: (context, _) => MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'เงินกูไปไหน',
+      theme: AppTheme.lightFor(state.appAccent),
+      darkTheme: AppTheme.darkFor(state.appAccent),
+      themeMode: state.appearanceMode,
+      home: _AppRouter(state: state),
     ),
   );
 }
@@ -684,26 +687,23 @@ class DashboardScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final data = state.snapshot;
     final projection = state.projectionSnapshot;
-    final foodBudget = projection?.categoryBudgets
-        .where((item) => item.name == 'อาหาร')
-        .firstOrNull;
-    final foodRatio = (foodBudget?.budgetUsedRatio ?? 0).clamp(0.0, 1.0);
-    final accountBreakdown = state.accounts
-        .where((account) => account['is_active'] == 1)
-        .map(
-          (account) =>
-              '${account['name']} ${_money(Money.fromSatang(account['balance_satang'] as int))}',
-        )
-        .toList();
+    final accent = Theme.of(context).colorScheme.primary;
     return Scaffold(
-      backgroundColor: const Color(0xFFEDF1EE),
+      backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
       body: SafeArea(
         child: ListView(
           children: [
             Container(
-              padding: const EdgeInsets.fromLTRB(22, 22, 22, 26),
-              decoration: const BoxDecoration(
-                color: AppColors.ink,
+              padding: const EdgeInsets.fromLTRB(22, 18, 22, 22),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    AppColors.ink,
+                    Color.lerp(AppColors.ink, accent, .45)!,
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
                 borderRadius: BorderRadius.vertical(
                   bottom: Radius.circular(30),
                 ),
@@ -734,55 +734,39 @@ class DashboardScreen extends StatelessWidget {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 22),
+                  const SizedBox(height: 12),
                   const Text(
-                    'เงินหายไปไหน เดี๋ยวหาให้',
-                    style: TextStyle(color: Color(0xFFAAB8BD)),
-                  ),
-                  const FittedBox(
-                    fit: BoxFit.scaleDown,
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      'วันนี้ยังรอด',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 40,
-                        height: 1,
-                        fontWeight: FontWeight.w700,
-                      ),
+                    'เงินจริงที่มี',
+                    style: TextStyle(
+                      color: Color(0xFFAAB8BD),
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
-                  const SizedBox(height: 28),
-                  const Text(
-                    'เงินจริงตอนนี้',
-                    style: TextStyle(color: Color(0xFFAAB8BD)),
+                  const SizedBox(height: 4),
+                  FinanceAmountText(
+                    satang: data.currentCash.satang,
+                    color: Colors.white,
+                    style: const TextStyle(
+                      fontSize: 38,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    crossAxisAlignment: CrossAxisAlignment.end,
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      Expanded(
-                        child: FinanceAmountText(
-                          satang: data.currentCash.satang,
+                      Text(
+                        'ใช้ได้วันนี้ ${_money(data.dailyAllowance)}',
+                        style: const TextStyle(
                           color: Colors.white,
-                          style: const TextStyle(
-                            fontSize: 34,
-                            fontWeight: FontWeight.w700,
-                          ),
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
-                      TextButton(
-                        onPressed: () => _breakdown(
-                          context,
-                          'เงินจริงรวม',
-                          accountBreakdown.isEmpty
-                              ? ['ยังไม่มีบัญชีที่เปิดใช้งาน']
-                              : accountBreakdown,
-                        ),
-                        child: const Text(
-                          'ดูที่มา',
-                          style: TextStyle(color: AppColors.mint),
-                        ),
+                      Text(
+                        'อีก ${projection?.daysRemaining ?? 1} วันถึงรอบเงินเดือน',
+                        style: const TextStyle(color: Color(0xFFAAB8BD)),
                       ),
                     ],
                   ),
@@ -793,56 +777,13 @@ class DashboardScreen extends StatelessWidget {
               padding: const EdgeInsets.all(16),
               child: Column(
                 children: [
-                  _AccountDistribution(
-                    accounts: state.accounts,
-                    onOpen: () => Navigator.push(
+                  _CompactSpendingSummary(
+                    state: state,
+                    onOpenAll: () => Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => DailyDriverScreen(state: state),
+                        builder: (_) => SpendingStatusScreen(state: state),
                       ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  LayoutBuilder(
-                    builder: (context, constraints) => Wrap(
-                      spacing: 10,
-                      runSpacing: 10,
-                      children: [
-                        SizedBox(
-                          width: constraints.maxWidth < 380
-                              ? constraints.maxWidth
-                              : (constraints.maxWidth - 10) / 2,
-                          child: _MetricCard(
-                            label: 'วันนี้ใช้ได้',
-                            value: _money(data.dailyAllowance),
-                            note:
-                                'งบคงเหลือ ÷ ${projection?.daysRemaining ?? 1} วัน',
-                            tone: AppColors.mintSoft,
-                            onTap: () => _breakdown(context, 'งบใช้ได้วันนี้', [
-                              'งบยืดหยุ่นคงเหลือ ${_money(projection?.flexibleMoneyRemaining ?? Money.zero)}',
-                              '÷ ${projection?.daysRemaining ?? 1} วันที่เหลือ',
-                              '= ${_money(data.dailyAllowance)}',
-                            ]),
-                          ),
-                        ),
-                        SizedBox(
-                          width: constraints.maxWidth < 380
-                              ? constraints.maxWidth
-                              : (constraints.maxWidth - 10) / 2,
-                          child: _MetricCard(
-                            label: 'คาดการณ์สิ้นรอบ',
-                            value: _money(data.forecast),
-                            note: 'เหลือตามแผน',
-                            onTap: () => _breakdown(context, 'Forecast สิ้นรอบ', [
-                              'เงินจริง ${_money(projection?.actualMoney ?? Money.zero)}',
-                              '+ รายรับที่ยังไม่เข้า ${_money(projection?.expectedIncomeRemaining ?? Money.zero)}',
-                              '− ภาระที่ยังไม่จ่าย ${_money(projection?.unpaidObligations ?? Money.zero)}',
-                              '− งบที่ยังวางแผนใช้ ${_money(projection?.plannedFlexibleSpendRemaining ?? Money.zero)}',
-                              '= ${_money(data.forecast)}',
-                            ]),
-                          ),
-                        ),
-                      ],
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -856,25 +797,6 @@ class DashboardScreen extends StatelessWidget {
                       }
                     },
                   ),
-                  if (state.dashboardCandidates.isNotEmpty) ...[
-                    const SizedBox(height: 12),
-                    _CandidateSignal(
-                      count: state.dashboardCandidates.length,
-                      onOpen: () {
-                        if (onNavigate != null) {
-                          onNavigate!(3);
-                        } else {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) =>
-                                  CandidateInboxScreen(state: state),
-                            ),
-                          );
-                        }
-                      },
-                    ),
-                  ],
                   const SizedBox(height: 12),
                   _RecentActivity(
                     rows: state.activities.take(3).toList(growable: false),
@@ -885,82 +807,8 @@ class DashboardScreen extends StatelessWidget {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  InkWell(
-                    borderRadius: BorderRadius.circular(18),
-                    onTap: () => _breakdown(
-                      context,
-                      foodBudget?.name ?? 'การใช้จ่ายตามหมวด',
-                      foodBudget == null
-                          ? ['ยังไม่ได้ตั้งงบหมวดอาหาร']
-                          : [
-                              'ใช้สุทธิ ${_money(foodBudget.spentNet)}',
-                              'งบทั้งหมด ${_money(foodBudget.budget)}',
-                              'คงเหลือ ${_money(foodBudget.remainingBudget)}',
-                              'รอบผ่านไป ${(foodBudget.cycleElapsedRatio * 100).round()}%',
-                            ],
-                    ),
-                    child: Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(18),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(18),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            projection?.warnings.firstOrNull ??
-                                'รายจ่ายยังอยู่ในแผน',
-                            style: const TextStyle(
-                              color: AppColors.orange,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            foodBudget == null
-                                ? 'ยังไม่ได้ตั้งงบอาหาร'
-                                : 'อาหารใช้ไปแล้ว ${((foodBudget.budgetUsedRatio ?? 0) * 100).round()}%',
-                            style: const TextStyle(
-                              fontSize: 22,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          LinearProgressIndicator(
-                            value: foodRatio,
-                            minHeight: 8,
-                            color: AppColors.orange,
-                            backgroundColor: Color(0xFFE4E8E5),
-                            borderRadius: BorderRadius.all(Radius.circular(99)),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            foodBudget == null
-                                ? 'แตะเพื่อตรวจรายละเอียด'
-                                : 'ใช้ ${_money(foodBudget.spentNet)} จากงบ ${_money(foodBudget.budget)}',
-                            style: const TextStyle(color: AppColors.muted),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  _InstallmentCard(
-                    progress: state.phoneProgress,
-                    onSetup: () => _configureInstallment(context, state),
-                  ),
-                  const SizedBox(height: 12),
-                  OutlinedButton.icon(
-                    key: const Key('open-financial-calendar'),
-                    onPressed: () => state.go(AppStep.calendar),
-                    icon: const Icon(Icons.calendar_month_outlined),
-                    label: const Text('ปฏิทินการเงิน'),
-                  ),
-                  const SizedBox(height: 8),
                   FilledButton.icon(
+                    key: const Key('dashboard-quick-add'),
                     onPressed: () async {
                       await showModalBottomSheet<void>(
                         context: context,
@@ -970,18 +818,7 @@ class DashboardScreen extends StatelessWidget {
                       );
                     },
                     icon: const Icon(Icons.add),
-                    label: const Text('บันทึกรายการเร็ว'),
-                  ),
-                  const SizedBox(height: 8),
-                  OutlinedButton.icon(
-                    onPressed: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const StatementPreviewScreen(),
-                      ),
-                    ),
-                    icon: const Icon(Icons.receipt_long_outlined),
-                    label: const Text('นำเข้า Statement'),
+                    label: const Text('เพิ่มรายการ'),
                   ),
                 ],
               ),
@@ -993,6 +830,267 @@ class DashboardScreen extends StatelessWidget {
   }
 }
 
+class _CompactSpendingSummary extends StatelessWidget {
+  const _CompactSpendingSummary({required this.state, required this.onOpenAll});
+  final AppState state;
+  final VoidCallback onOpenAll;
+
+  @override
+  Widget build(BuildContext context) {
+    final gauges = rankHomeSpendingGauges(state.spendingGauges);
+    return Card(
+      key: const Key('dashboard-budget-summary'),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'สถานะงบเดือนนี้',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                  ),
+                ),
+                TextButton(
+                  onPressed: onOpenAll,
+                  child: const Text('ดูทั้งหมด'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (gauges.isEmpty)
+              _CompactEmptyBudget(onOpenAll: onOpenAll)
+            else
+              for (final gauge in gauges) ...[
+                KeyedSubtree(
+                  key: Key('dashboard-gauge-${gauge.categoryId}'),
+                  child: _GaugeRow(
+                    gauge: gauge,
+                    onSetBudget: onOpenAll,
+                    showAction: false,
+                  ),
+                ),
+                const SizedBox(height: 10),
+              ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class SpendingStatusScreen extends StatelessWidget {
+  const SpendingStatusScreen({required this.state, super.key});
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final gauges = _allExpenseGauges(state);
+    return Scaffold(
+      appBar: AppBar(title: const Text('สถานะงบเดือนนี้')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          const Text(
+            'งบเป็นแผนการใช้เงิน ไม่เปลี่ยนเงินจริงในบัญชี',
+            style: TextStyle(color: AppColors.muted),
+          ),
+          const SizedBox(height: 12),
+          if (gauges.isEmpty)
+            const Text('ยังไม่มีหมวดรายจ่ายให้ตั้งงบ')
+          else
+            for (final gauge in gauges) ...[
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: _GaugeRow(
+                    gauge: gauge,
+                    onSetBudget: () =>
+                        _editCategoryBudget(context, state, gauge),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+        ],
+      ),
+    );
+  }
+}
+
+class _CompactEmptyBudget extends StatelessWidget {
+  const _CompactEmptyBudget({required this.onOpenAll});
+  final VoidCallback onOpenAll;
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      const Expanded(
+        child: Text(
+          'ยังไม่ได้ตั้งงบรายหมวด',
+          style: TextStyle(color: AppColors.muted),
+        ),
+      ),
+      TextButton(onPressed: onOpenAll, child: const Text('ตั้งงบ')),
+    ],
+  );
+}
+
+List<SpendingGauge> _allExpenseGauges(AppState state) {
+  final recorded = {
+    for (final gauge in state.spendingGauges) gauge.categoryId: gauge,
+  };
+  final gauges = state.categories
+      .where(
+        (category) =>
+            category['category_type'] == 'expense' &&
+            category['is_archived'] != 1,
+      )
+      .map((category) {
+        final id = category['id'] as String;
+        return recorded[id] ??
+            SpendingGauge(
+              categoryId: id,
+              name: category['name'] as String,
+              iconKey: category['icon_key'] as String?,
+              usedSatang: 0,
+              budgetSatang: 0,
+            );
+      })
+      .toList();
+  return rankHomeSpendingGauges(gauges, limit: gauges.length) +
+      (gauges.where((gauge) => !gauge.hasBudget).toList()
+        ..sort((left, right) => left.name.compareTo(right.name)));
+}
+
+Future<void> _editCategoryBudget(
+  BuildContext context,
+  AppState state,
+  SpendingGauge gauge,
+) async {
+  final controller = TextEditingController(
+    text: gauge.hasBudget ? (gauge.budgetSatang / 100).toStringAsFixed(0) : '',
+  );
+  final result = await showDialog<String>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text('ตั้งงบ ${gauge.name} ต่อเดือน'),
+      content: TextField(
+        controller: controller,
+        autofocus: true,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        decoration: const InputDecoration(
+          labelText: 'จำนวนเงิน',
+          prefixText: '฿',
+        ),
+      ),
+      actions: [
+        if (gauge.hasBudget)
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'remove'),
+            child: const Text('ลบงบ'),
+          ),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('ยกเลิก'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, controller.text),
+          child: const Text('บันทึก'),
+        ),
+      ],
+    ),
+  );
+  if (result == null) return;
+  if (result == 'remove') {
+    await state.removeCategoryMonthlyBudget(gauge.categoryId);
+    return;
+  }
+  final amount = double.tryParse(result.replaceAll(',', ''));
+  if (amount == null || amount <= 0) return;
+  await state.setCategoryMonthlyBudget(
+    gauge.categoryId,
+    (amount * 100).round(),
+  );
+}
+
+class _GaugeRow extends StatelessWidget {
+  const _GaugeRow({
+    required this.gauge,
+    required this.onSetBudget,
+    this.showAction = true,
+  });
+  final SpendingGauge gauge;
+  final VoidCallback onSetBudget;
+  final bool showAction;
+  @override
+  Widget build(BuildContext context) {
+    final ratio = gauge.usageRatio;
+    final color = switch (gauge.state) {
+      SpendingGaugeState.safe => FinancialColors.safe,
+      SpendingGaugeState.warning => FinancialColors.warning,
+      SpendingGaugeState.critical => FinancialColors.critical,
+      SpendingGaugeState.over => FinancialColors.overBudget,
+      SpendingGaugeState.unbudgeted => AppColors.muted,
+    };
+    final categoryColor = CategoryAccentPalette.resolve(
+      stableKey: gauge.categoryId,
+      storedValue: gauge.colorValue,
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              width: 10,
+              height: 10,
+              decoration: BoxDecoration(
+                color: categoryColor,
+                shape: BoxShape.circle,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                gauge.name,
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+            if (showAction)
+              TextButton(
+                onPressed: onSetBudget,
+                child: Text(gauge.hasBudget ? 'แก้งบ' : 'ตั้งงบ'),
+              ),
+          ],
+        ),
+        if (ratio != null)
+          LinearProgressIndicator(
+            value: ratio.clamp(0.0, 1.0),
+            color: color,
+            backgroundColor: AppColors.line,
+          ),
+        const SizedBox(height: 4),
+        Text(
+          gauge.hasBudget
+              ? '${_money(Money.fromSatang(gauge.usedSatang))} / ${_money(Money.fromSatang(gauge.budgetSatang))} • ${gauge.usagePercent}%'
+              : 'ใช้ไป ${_money(Money.fromSatang(gauge.usedSatang))} • ยังไม่ได้ตั้งงบ',
+        ),
+        if (gauge.hasBudget)
+          Text(
+            gauge.overBudgetSatang > 0
+                ? 'เกินงบ ${_money(Money.fromSatang(gauge.overBudgetSatang))}'
+                : 'เหลือ ${_money(Money.fromSatang(gauge.remainingSatang))}',
+            style: TextStyle(color: color, fontWeight: FontWeight.w700),
+          ),
+      ],
+    );
+  }
+}
+
+// Kept for a later account-detail drill-down; UI-R5 removes it from Home.
+// ignore: unused_element
 class _AccountDistribution extends StatelessWidget {
   const _AccountDistribution({required this.accounts, required this.onOpen});
   final List<Map<String, Object?>> accounts;
@@ -1077,7 +1175,7 @@ class _UpcomingPanel extends StatelessWidget {
     key: const Key('dashboard-upcoming'),
     padding: const EdgeInsets.all(18),
     decoration: BoxDecoration(
-      color: Colors.white,
+      color: Theme.of(context).colorScheme.surface,
       borderRadius: BorderRadius.circular(18),
     ),
     child: Column(
@@ -1088,15 +1186,15 @@ class _UpcomingPanel extends StatelessWidget {
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             const Text(
-              'เร็ว ๆ นี้',
+              'กำลังจะถึง',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
             ),
-            TextButton(onPressed: onOpen, child: const Text('ดูปฏิทินทั้งหมด')),
+            TextButton(onPressed: onOpen, child: const Text('ปฏิทิน')),
           ],
         ),
         if (events.isEmpty)
           const Text(
-            'ยังไม่มีรายการที่กำลังจะมาถึง',
+            'ยังไม่มีรายการที่กำลังจะถึง',
             style: TextStyle(color: AppColors.muted),
           )
         else
@@ -1127,8 +1225,10 @@ class _UpcomingPanel extends StatelessWidget {
                       event.direction != FinancialCalendarDirection.transfer,
                   textAlign: TextAlign.end,
                   color: event.direction == FinancialCalendarDirection.outgoing
-                      ? AppColors.red
-                      : AppColors.violet,
+                      ? FinancialColors.expense
+                      : event.direction == FinancialCalendarDirection.transfer
+                      ? FinancialColors.transfer
+                      : FinancialColors.income,
                   style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
               ),
@@ -1138,6 +1238,8 @@ class _UpcomingPanel extends StatelessWidget {
   );
 }
 
+// Candidate review remains a primary navigation destination, not Home content.
+// ignore: unused_element
 class _CandidateSignal extends StatelessWidget {
   const _CandidateSignal({required this.count, required this.onOpen});
   final int count;
@@ -1169,7 +1271,7 @@ class _RecentActivity extends StatelessWidget {
     key: const Key('dashboard-recent-activity'),
     padding: const EdgeInsets.all(18),
     decoration: BoxDecoration(
-      color: Colors.white,
+      color: Theme.of(context).colorScheme.surface,
       borderRadius: BorderRadius.circular(18),
     ),
     child: Column(
@@ -1183,11 +1285,14 @@ class _RecentActivity extends StatelessWidget {
               'ล่าสุด',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
             ),
-            TextButton(onPressed: onOpen, child: const Text('ดูทั้งหมด')),
+            TextButton(onPressed: onOpen, child: const Text('ดูรายการทั้งหมด')),
           ],
         ),
         if (rows.isEmpty)
-          const Text('ยังไม่มีรายการ', style: TextStyle(color: AppColors.muted))
+          const Text(
+            'ยังไม่มีรายการล่าสุด',
+            style: TextStyle(color: AppColors.muted),
+          )
         else
           for (final row in rows)
             ListTile(
@@ -1207,7 +1312,7 @@ class _RecentActivity extends StatelessWidget {
                   satang: _activitySigned(row),
                   signed: !_isTransfer(row['type'] as String),
                   textAlign: TextAlign.end,
-                  color: _activitySigned(row) < 0 ? AppColors.red : null,
+                  color: _activityColor(row),
                   style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
               ),
@@ -1219,6 +1324,12 @@ class _RecentActivity extends StatelessWidget {
 
 bool _isTransfer(String type) =>
     type == 'transfer_in' || type == 'transfer_out';
+Color? _activityColor(Map<String, Object?> row) {
+  final type = row['type'] as String;
+  if (_isTransfer(type)) return FinancialColors.transfer;
+  if (type == 'refund') return FinancialColors.refund;
+  return _activitySigned(row) < 0 ? FinancialColors.expense : FinancialColors.income;
+}
 int _activitySigned(Map<String, Object?> row) {
   final type = row['type'] as String;
   final amount = row['amount_satang'] as int;
@@ -1711,12 +1822,15 @@ class _ClassificationSheet extends StatelessWidget {
   );
 }
 
+// Reused by a future analytics drill-down; intentionally not part of Home.
+// ignore: unused_element
 class _MetricCard extends StatelessWidget {
   const _MetricCard({
     required this.label,
     required this.value,
     required this.note,
     required this.onTap,
+    // ignore: unused_element_parameter
     this.tone = Colors.white,
   });
   final String label, value, note;
@@ -1938,6 +2052,8 @@ void _breakdown(BuildContext context, String title, List<String> rows) =>
     );
 String _money(Money value) => FinanceMoneyFormat.money(value);
 
+// Installment details remain available through their dedicated flow.
+// ignore: unused_element
 class _InstallmentCard extends StatelessWidget {
   const _InstallmentCard({required this.progress, required this.onSetup});
   final InstallmentProgress? progress;
@@ -1995,6 +2111,7 @@ class _InstallmentCard extends StatelessWidget {
   }
 }
 
+// ignore: unused_element
 Future<void> _configureInstallment(BuildContext context, AppState state) async {
   final total = TextEditingController();
   final paid = TextEditingController();

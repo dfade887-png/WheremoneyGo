@@ -52,7 +52,7 @@ void main() {
   tearDown(() => repo.dispose());
 
   test('repository migrates to latest schema version', () async {
-    expect(await repo.schemaVersion(), 6);
+    expect(await repo.schemaVersion(), 7);
     expect(
       repo.query(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='statement_rows'",

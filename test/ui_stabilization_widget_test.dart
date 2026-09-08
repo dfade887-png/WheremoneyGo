@@ -108,8 +108,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('เงินจริงตอนนี้'), findsOneWidget);
-    expect(find.text('คาดการณ์สิ้นรอบ'), findsOneWidget);
+    expect(find.text('เงินจริงที่มี'), findsOneWidget);
+    expect(find.text('สถานะงบเดือนนี้'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

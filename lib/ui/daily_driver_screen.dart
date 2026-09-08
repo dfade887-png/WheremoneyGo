@@ -226,7 +226,9 @@ class _ActivityTab extends StatelessWidget {
                         : -(row['amount_satang'] as int),
                     signed: true,
                     textAlign: TextAlign.end,
-                    color: incoming ? Colors.green.shade700 : AppColors.red,
+                    color: incoming
+                        ? FinancialColors.income
+                        : FinancialColors.expense,
                     style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                 ),
@@ -1517,6 +1519,7 @@ Future<void> _categoryDialog(BuildContext context, AppState state) async {
   final name = TextEditingController();
   var type = 'expense';
   var icon = 'sports_esports';
+  var accent = CategoryAccentPalette.values.first.toARGB32();
   await showDialog<void>(
     context: context,
     builder: (context) => StatefulBuilder(
@@ -1551,6 +1554,25 @@ Future<void> _categoryDialog(BuildContext context, AppState state) async {
               onChanged: (v) => setDialog(() => icon = v!),
               decoration: const InputDecoration(labelText: 'ไอคอน *'),
             ),
+            const SizedBox(height: 10),
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Text('สีหมวดหมู่'),
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 8,
+              children: [
+                for (final color in CategoryAccentPalette.values)
+                  ChoiceChip(
+                    selected: accent == color.toARGB32(),
+                    label: const SizedBox(width: 12, height: 12),
+                    avatar: CircleAvatar(backgroundColor: color, radius: 8),
+                    onSelected: (_) =>
+                        setDialog(() => accent = color.toARGB32()),
+                  ),
+              ],
+            ),
           ],
         ),
         actions: [
@@ -1561,7 +1583,12 @@ Future<void> _categoryDialog(BuildContext context, AppState state) async {
           FilledButton(
             onPressed: () async {
               if (name.text.trim().isEmpty) return;
-              await state.addCategory(name.text.trim(), type, icon);
+              await state.addCategory(
+                name.text.trim(),
+                type,
+                icon,
+                colorValue: accent,
+              );
               if (context.mounted) Navigator.pop(context);
             },
             child: const Text('เพิ่ม'),

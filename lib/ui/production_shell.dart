@@ -111,6 +111,15 @@ class _MoreScreen extends StatelessWidget {
           ),
         ),
         const Divider(),
+        ListTile(
+          leading: const Icon(Icons.palette_outlined),
+          title: const Text('รูปลักษณ์'),
+          subtitle: const Text('ธีมและสีเน้นของแอป'),
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => AppearanceScreen(state: state)),
+          ),
+        ),
         const Text(
           'การตรวจจับรายการ',
           style: TextStyle(color: AppColors.muted, fontWeight: FontWeight.w700),
@@ -149,6 +158,62 @@ class _MoreScreen extends StatelessWidget {
           ),
         ),
       ],
+    ),
+  );
+}
+
+class AppearanceScreen extends StatelessWidget {
+  const AppearanceScreen({required this.state, super.key});
+  final AppState state;
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('รูปลักษณ์')),
+    body: ListenableBuilder(
+      listenable: state,
+      builder: (context, _) => ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          const Text(
+            'Appearance',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
+          Wrap(
+            spacing: 8,
+            children: [
+              for (final mode in ThemeMode.values)
+                ChoiceChip(
+                  selected: state.appearanceMode == mode,
+                  label: Text(switch (mode) {
+                    ThemeMode.system => 'System',
+                    ThemeMode.light => 'Light',
+                    ThemeMode.dark => 'Dark',
+                  }),
+                  onSelected: (_) =>
+                      state.setAppearance(mode, state.appAccent),
+                ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          const Text('Accent', style: TextStyle(fontWeight: FontWeight.w700)),
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            children: [
+              for (final accent in AppAccent.values)
+                ChoiceChip(
+                  selected: state.appAccent == accent,
+                  label: Text(accent.label),
+                  avatar: CircleAvatar(
+                    backgroundColor: AppTheme.accent(accent),
+                    radius: 8,
+                  ),
+                  onSelected: (_) =>
+                      state.setAppearance(state.appearanceMode, accent),
+                ),
+            ],
+          ),
+        ],
+      ),
     ),
   );
 }

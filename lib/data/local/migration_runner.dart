@@ -6,6 +6,7 @@ import 'schema_v3.dart';
 import 'schema_v4.dart';
 import 'schema_v5.dart';
 import 'schema_v6.dart';
+import 'schema_v7.dart';
 
 abstract final class MigrationRunner {
   static void migrateToV1(Database database, {List<String>? statements}) {
@@ -29,7 +30,9 @@ abstract final class MigrationRunner {
     List<String>? v4Statements,
     List<String>? v5Statements,
     List<String>? v6Statements,
+    List<String>? v7Statements,
     bool includeV6 = false,
+    bool includeV7 = false,
   }) {
     migrateToV1(database);
     if (database.userVersion < SchemaV2.version) {
@@ -88,6 +91,20 @@ abstract final class MigrationRunner {
       database.execute('BEGIN IMMEDIATE');
       try {
         for (final statement in v6Statements ?? SchemaV6.statements) {
+          database.execute(statement);
+        }
+        database.execute('COMMIT');
+      } catch (_) {
+        database.execute('ROLLBACK');
+        rethrow;
+      }
+    }
+    if (includeV7 &&
+        database.userVersion >= SchemaV6.version &&
+        database.userVersion < SchemaV7.version) {
+      database.execute('BEGIN IMMEDIATE');
+      try {
+        for (final statement in v7Statements ?? SchemaV7.statements) {
           database.execute(statement);
         }
         database.execute('COMMIT');

@@ -1,10 +1,11 @@
 import 'dart:io' show Platform;
 
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart';
 import '../core/money.dart';
 import '../domain/models/financial_models.dart';
 import '../domain/financial_snapshot.dart' as projection;
 import '../domain/financial_calendar.dart';
+import '../domain/spending_gauge.dart';
 import '../domain/calendar_entry_policy.dart';
 import '../domain/candidate_review.dart';
 import '../data/repositories/sqlite_finance_repository.dart';
@@ -12,6 +13,7 @@ import '../data/notification_capture_bridge.dart';
 import '../data/slip_media_scanner.dart';
 import '../data/slip_media_lifecycle_gate.dart';
 import 'local_finance_store.dart';
+import 'theme/app_theme.dart';
 
 enum AppStep {
   welcome,
@@ -59,8 +61,11 @@ final class AppState extends ChangeNotifier with WidgetsBindingObserver {
   List<Map<String, Object?>> categories = const [];
   List<Map<String, Object?>> activities = const [];
   List<Map<String, Object?>> commitments = const [];
+  List<SpendingGauge> spendingGauges = const [];
   List<Map<String, Object?>> profiles = const [];
   String? activeProfileId;
+  ThemeMode appearanceMode = ThemeMode.system;
+  AppAccent appAccent = AppAccent.pink;
   projection.FinancialSnapshot? projectionSnapshot;
   List<FinancialCalendarEvent> dashboardUpcoming = const [];
   List<CandidateReviewItem> dashboardCandidates = const [];
@@ -116,6 +121,7 @@ final class AppState extends ChangeNotifier with WidgetsBindingObserver {
         ];
         salaryAccountDraftId = 'primary';
       }
+      await _loadAppearance();
       await refreshDailyData();
       initialized = true;
       viewStatus = ViewStatus.ready;
@@ -125,6 +131,32 @@ final class AppState extends ChangeNotifier with WidgetsBindingObserver {
     } catch (_) {
       viewStatus = ViewStatus.error;
     }
+    notifyListeners();
+  }
+
+  Future<void> _loadAppearance() async {
+    final mode = await financeRepository.appearanceSetting('appearance_mode');
+    final accent = await financeRepository.appearanceSetting(
+      'appearance_accent',
+    );
+    appearanceMode = ThemeMode.values.firstWhere(
+      (value) => value.name == mode,
+      orElse: () => ThemeMode.system,
+    );
+    appAccent = AppAccent.values.firstWhere(
+      (value) => value.name == accent,
+      orElse: () => AppAccent.pink,
+    );
+  }
+
+  Future<void> setAppearance(ThemeMode mode, AppAccent accent) async {
+    await financeRepository.setAppearanceSetting('appearance_mode', mode.name);
+    await financeRepository.setAppearanceSetting(
+      'appearance_accent',
+      accent.name,
+    );
+    appearanceMode = mode;
+    appAccent = accent;
     notifyListeners();
   }
 
@@ -303,6 +335,9 @@ final class AppState extends ChangeNotifier with WidgetsBindingObserver {
     categories = await _store!.categories();
     activities = await _store!.activity();
     commitments = await _store!.commitments();
+    spendingGauges = await _store!.repository.monthlySpendingGauges(
+      DateTime.now(),
+    );
     final inputs = await _store!.projectionInputs();
     projectionSnapshot = projection.FinancialSnapshotCalculator.calculate(
       profileId: activeProfileId!,
@@ -370,6 +405,7 @@ final class AppState extends ChangeNotifier with WidgetsBindingObserver {
       emergencyTarget = profile.emergencyTarget;
       foodSpent = profile.foodSpent;
     }
+    await _loadAppearance();
     await refreshDailyData();
   }
 
@@ -394,8 +430,18 @@ final class AppState extends ChangeNotifier with WidgetsBindingObserver {
     await refreshDailyData();
   }
 
-  Future<void> addCategory(String name, String type, String iconKey) async {
-    await _store!.addCategory(name: name, type: type, iconKey: iconKey);
+  Future<void> addCategory(
+    String name,
+    String type,
+    String iconKey, {
+    int? colorValue,
+  }) async {
+    await _store!.addCategory(
+      name: name,
+      type: type,
+      iconKey: iconKey,
+      colorValue: colorValue,
+    );
     await refreshDailyData();
   }
 
@@ -505,6 +551,19 @@ final class AppState extends ChangeNotifier with WidgetsBindingObserver {
       accountId: accountId,
       categoryId: categoryId,
     );
+    await refreshDailyData();
+  }
+
+  Future<void> setCategoryMonthlyBudget(
+    String categoryId,
+    int amountSatang,
+  ) async {
+    await _store!.repository.setCategoryMonthlyBudget(categoryId, amountSatang);
+    await refreshDailyData();
+  }
+
+  Future<void> removeCategoryMonthlyBudget(String categoryId) async {
+    await _store!.repository.removeCategoryMonthlyBudget(categoryId);
     await refreshDailyData();
   }
 

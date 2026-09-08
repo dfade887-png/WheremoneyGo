@@ -30,12 +30,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('เงินจริงตอนนี้'), findsOneWidget);
-    expect(
-      find.byKey(const Key('dashboard-account-distribution')),
-      findsOneWidget,
-    );
-    expect(find.text('คาดการณ์สิ้นรอบ'), findsOneWidget);
+    expect(find.text('เงินจริงที่มี'), findsOneWidget);
+    expect(find.byKey(const Key('dashboard-budget-summary')), findsOneWidget);
     expect(find.byKey(const Key('dashboard-upcoming')), findsOneWidget);
     expect(find.byKey(const Key('dashboard-recent-activity')), findsOneWidget);
     expect(find.text('รายการรอตรวจ 0'), findsNothing);
@@ -54,7 +50,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('หน้าหลัก'), findsOneWidget);
-    await tester.tap(find.text('ปฏิทิน'));
+    await tester.tap(find.text('ปฏิทิน').last);
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('calendar-month-title')), findsOneWidget);
 
@@ -88,7 +84,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('เงินจริงตอนนี้'), findsOneWidget);
+    expect(find.text('เงินจริงที่มี'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

@@ -80,10 +80,9 @@ void main() {
       await tester.tap(find.text('ถัดไป'));
       await tester.pumpAndSettle();
     }
-    expect(find.text('วันนี้ยังรอด'), findsOneWidget);
+    expect(find.text('เงินจริงที่มี'), findsOneWidget);
     expect(find.text('LOCAL DATA • ข้อมูลจริง'), findsOneWidget);
-    expect(find.text('เงินจริงตอนนี้'), findsOneWidget);
-    expect(find.text('คาดการณ์สิ้นรอบ'), findsOneWidget);
+    expect(find.text('สถานะงบเดือนนี้'), findsOneWidget);
   });
   testWidgets('quick add requires amount and category', (tester) async {
     await tester.pumpWidget(

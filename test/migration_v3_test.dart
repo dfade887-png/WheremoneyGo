@@ -10,7 +10,7 @@ void main() {
   test('schema v3 creates daily driver tables', () async {
     final repository = SqliteFinanceRepository.memory();
     addTearDown(repository.dispose);
-    expect(await repository.schemaVersion(), 6);
+    expect(await repository.schemaVersion(), 7);
     expect(
       repository
           .query(
@@ -111,7 +111,7 @@ void main() {
         'checksum': sha256.convert(utf8.encode(payload)).toString(),
       });
       expect((await target.accounts()).single['opening_balance_satang'], 12345);
-      expect(await target.schemaVersion(), 6);
+      expect(await target.schemaVersion(), 7);
     },
   );
 }

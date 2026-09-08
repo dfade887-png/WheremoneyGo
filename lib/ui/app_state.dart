@@ -5,6 +5,7 @@ import '../core/money.dart';
 import '../domain/models/financial_models.dart';
 import '../domain/financial_snapshot.dart' as projection;
 import '../domain/financial_calendar.dart';
+import '../domain/calendar_entry_policy.dart';
 import '../domain/candidate_review.dart';
 import '../data/repositories/sqlite_finance_repository.dart';
 import '../data/notification_capture_bridge.dart';
@@ -403,6 +404,7 @@ final class AppState extends ChangeNotifier with WidgetsBindingObserver {
     required String categoryId,
     required String type,
     required Money amount,
+    DateTime? occurredAt,
     String? note,
   }) async {
     await _store!.addTransaction(
@@ -410,19 +412,60 @@ final class AppState extends ChangeNotifier with WidgetsBindingObserver {
       categoryId: categoryId,
       type: type,
       amount: amount,
+      occurredAt: occurredAt,
       note: note,
     );
     await refreshDailyData();
   }
 
-  Future<void> addTransfer(String from, String to, Money amount) async {
+  Future<void> addTransfer(
+    String from,
+    String to,
+    Money amount, {
+    DateTime? occurredAt,
+  }) async {
     await _store!.transfer(
       fromAccountId: from,
       toAccountId: to,
       amount: amount,
+      occurredAt: occurredAt,
     );
     await refreshDailyData();
   }
+
+  Future<void> addCalendarTransaction({
+    required DateTime selectedDate,
+    required String accountId,
+    required String categoryId,
+    required String type,
+    required Money amount,
+    String? note,
+  }) => addDailyTransaction(
+    accountId: accountId,
+    categoryId: categoryId,
+    type: type,
+    amount: amount,
+    note: note,
+    occurredAt: CalendarEntryPolicy.confirmedOccurredAt(
+      selectedDate,
+      DateTime.now(),
+    ),
+  );
+
+  Future<void> addCalendarTransfer({
+    required DateTime selectedDate,
+    required String fromAccountId,
+    required String toAccountId,
+    required Money amount,
+  }) => addTransfer(
+    fromAccountId,
+    toAccountId,
+    amount,
+    occurredAt: CalendarEntryPolicy.confirmedOccurredAt(
+      selectedDate,
+      DateTime.now(),
+    ),
+  );
 
   Future<void> removeTransaction(String id) async {
     await _store!.deleteTransaction(id);

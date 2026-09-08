@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../domain/financial_calendar.dart';
 import 'app_state.dart';
+import 'daily_driver_screen.dart';
 import 'financial_calendar_controller.dart';
 import 'finance_components.dart';
 import 'scheduled_event_editor_screen.dart';
@@ -118,8 +119,8 @@ class _FinancialCalendarScreenState extends State<FinancialCalendarScreen> {
                   _InlineError(message: controller.error!),
                 ],
                 const SizedBox(height: 16),
-                const Text(
-                  'รายการของวันนี้',
+                Text(
+                  _dayTitle(controller.selectedDate),
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 8),
@@ -158,17 +159,34 @@ class _FinancialCalendarScreenState extends State<FinancialCalendarScreen> {
         },
       ),
     ),
-    floatingActionButton: FloatingActionButton.extended(
-      key: const Key('calendar-create-scheduled'),
-      onPressed: _openCreate,
-      icon: const Icon(Icons.add),
-      label: const Text('เพิ่มรายการล่วงหน้า'),
+    floatingActionButton: ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) => FloatingActionButton.extended(
+        key: const Key('calendar-create-scheduled'),
+        onPressed: _openCreate,
+        icon: const Icon(Icons.add),
+        label: Text(_createLabel(controller.selectedDate)),
+      ),
     ),
   );
 
   Future<void> _openCreate() async {
     final selected = controller.selectedDate;
     final now = DateTime.now();
+    if (!_isFutureDate(selected, now)) {
+      final changed = await Navigator.push<bool>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => Scaffold(
+            body: SafeArea(
+              child: DailyQuickAdd(state: widget.state, calendarDate: selected),
+            ),
+          ),
+        ),
+      );
+      if (changed == true) await _reloadAfterTransaction();
+      return;
+    }
     var initial = DateTime(selected.year, selected.month, selected.day, 9);
     if (!initial.isAfter(now)) initial = now.add(const Duration(hours: 1));
     final changed = await Navigator.push<bool>(
@@ -218,6 +236,41 @@ class _FinancialCalendarScreenState extends State<FinancialCalendarScreen> {
         context,
       ).showSnackBar(const SnackBar(content: Text('อัปเดตแผนการเงินแล้ว')));
     }
+  }
+
+  Future<void> _reloadAfterTransaction() async {
+    await widget.state.refreshDailyData();
+    await controller.load();
+  }
+
+  bool _isFutureDate(DateTime selected, DateTime now) => DateTime(
+    selected.year,
+    selected.month,
+    selected.day,
+  ).isAfter(DateTime(now.year, now.month, now.day));
+
+  String _createLabel(DateTime selected) {
+    final today = DateTime.now();
+    if (_isFutureDate(selected, today)) {
+      return 'เพิ่มรายการตามกำหนด';
+    }
+    if (DateTime(selected.year, selected.month, selected.day) ==
+        DateTime(today.year, today.month, today.day)) {
+      return 'เพิ่มรายการ';
+    }
+    return 'เพิ่มรายการย้อนหลัง';
+  }
+
+  String _dayTitle(DateTime selected) {
+    final today = DateTime.now();
+    if (_isFutureDate(selected, today)) {
+      return 'รายการตามกำหนด';
+    }
+    if (DateTime(selected.year, selected.month, selected.day) ==
+        DateTime(today.year, today.month, today.day)) {
+      return 'รายการของวันนี้';
+    }
+    return 'รายการย้อนหลัง';
   }
 
   Future<void> _confirm(FinancialCalendarEvent event) async {

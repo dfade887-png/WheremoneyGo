@@ -43,3 +43,8 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // Bundled, on-device OCR. No image or text is sent off-device.
+    implementation("com.google.mlkit:text-recognition:16.0.1")
+}

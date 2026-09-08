@@ -848,8 +848,11 @@ Future<void> _payCommitment(
 }
 
 class DailyQuickAdd extends StatefulWidget {
-  const DailyQuickAdd({required this.state, super.key});
+  const DailyQuickAdd({required this.state, this.calendarDate, super.key});
   final AppState state;
+
+  /// A past/today Calendar date. Future dates use ScheduledEventEditor instead.
+  final DateTime? calendarDate;
   @override
   State<DailyQuickAdd> createState() => _DailyQuickAddState();
 }
@@ -948,6 +951,19 @@ class _DailyQuickAddState extends State<DailyQuickAdd> {
 
   @override
   Widget build(BuildContext context) {
+    final isBackdated =
+        widget.calendarDate != null &&
+        DateTime(
+          widget.calendarDate!.year,
+          widget.calendarDate!.month,
+          widget.calendarDate!.day,
+        ).isBefore(
+          DateTime(
+            DateTime.now().year,
+            DateTime.now().month,
+            DateTime.now().day,
+          ),
+        );
     final activeAccounts = widget.state.accounts
         .where((a) => a['is_active'] == 1)
         .toList();
@@ -1003,6 +1019,14 @@ class _DailyQuickAddState extends State<DailyQuickAdd> {
                   ),
                 ],
               ),
+              if (isBackdated) ...[
+                const SizedBox(height: 4),
+                Text(
+                  'กำลังบันทึกรายการย้อนหลังสำหรับ ${widget.calendarDate!.day}/${widget.calendarDate!.month}/${widget.calendarDate!.year}',
+                  style: const TextStyle(color: AppColors.orange),
+                ),
+                const SizedBox(height: 8),
+              ],
               SegmentedButton<String>(
                 segments: const [
                   ButtonSegment(value: 'expense', label: Text('รายจ่าย')),
@@ -1131,23 +1155,45 @@ class _DailyQuickAddState extends State<DailyQuickAdd> {
                         try {
                           final money = Money.fromBaht(value);
                           if (type == 'transfer') {
-                            await widget.state.addTransfer(
-                              accountId!,
-                              toAccountId!,
-                              money,
-                            );
+                            if (widget.calendarDate == null) {
+                              await widget.state.addTransfer(
+                                accountId!,
+                                toAccountId!,
+                                money,
+                              );
+                            } else {
+                              await widget.state.addCalendarTransfer(
+                                selectedDate: widget.calendarDate!,
+                                fromAccountId: accountId!,
+                                toAccountId: toAccountId!,
+                                amount: money,
+                              );
+                            }
                           } else {
-                            await widget.state.addDailyTransaction(
-                              accountId: accountId!,
-                              categoryId: categoryId!,
-                              type: type,
-                              amount: money,
-                              note: note.text.trim().isEmpty
-                                  ? null
-                                  : note.text.trim(),
-                            );
+                            if (widget.calendarDate == null) {
+                              await widget.state.addDailyTransaction(
+                                accountId: accountId!,
+                                categoryId: categoryId!,
+                                type: type,
+                                amount: money,
+                                note: note.text.trim().isEmpty
+                                    ? null
+                                    : note.text.trim(),
+                              );
+                            } else {
+                              await widget.state.addCalendarTransaction(
+                                selectedDate: widget.calendarDate!,
+                                accountId: accountId!,
+                                categoryId: categoryId!,
+                                type: type,
+                                amount: money,
+                                note: note.text.trim().isEmpty
+                                    ? null
+                                    : note.text.trim(),
+                              );
+                            }
                           }
-                          if (context.mounted) Navigator.pop(context);
+                          if (context.mounted) Navigator.pop(context, true);
                         } catch (_) {
                           if (context.mounted) {
                             setState(() {

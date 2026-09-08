@@ -13,6 +13,8 @@ void main() {
       "INSERT INTO installments(id,name,amount_satang,due_day,start_date,created_at,updated_at) VALUES('phone','Phone',100000,1,'2026-01-01','x','x')",
     );
     MigrationRunner.migrateToLatest(db);
+    // MigrationRunner's historical test path intentionally stops at v5;
+    // production repositories opt into the additive v6 slip migration.
     expect(db.userVersion, 5);
     final row = db
         .select(

@@ -164,10 +164,12 @@ final class LocalFinanceStore {
     required String fromAccountId,
     required String toAccountId,
     required Money amount,
+    DateTime? occurredAt,
   }) => repository.createTransfer(
     fromAccountId: fromAccountId,
     toAccountId: toAccountId,
     amountSatang: amount.satang,
+    occurredAt: occurredAt,
   );
 
   Future<void> archiveAccount(String id) => repository.archiveAccount(id);

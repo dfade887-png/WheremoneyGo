@@ -5,6 +5,7 @@ import 'schema_v2.dart';
 import 'schema_v3.dart';
 import 'schema_v4.dart';
 import 'schema_v5.dart';
+import 'schema_v6.dart';
 
 abstract final class MigrationRunner {
   static void migrateToV1(Database database, {List<String>? statements}) {
@@ -27,6 +28,8 @@ abstract final class MigrationRunner {
     List<String>? v3Statements,
     List<String>? v4Statements,
     List<String>? v5Statements,
+    List<String>? v6Statements,
+    bool includeV6 = false,
   }) {
     migrateToV1(database);
     if (database.userVersion < SchemaV2.version) {
@@ -65,19 +68,33 @@ abstract final class MigrationRunner {
         rethrow;
       }
     }
-    if (database.userVersion < SchemaV4.version ||
-        database.userVersion >= SchemaV5.version) {
-      return;
-    }
-    database.execute('BEGIN IMMEDIATE');
-    try {
-      for (final statement in v5Statements ?? SchemaV5.statements) {
-        database.execute(statement);
+    // V5 is a v4-only bridge. Test fixtures (and historical interrupted
+    // upgrades) may deliberately remain below v4 and must not receive v5
+    // tables that depend on v4 transaction columns.
+    if (database.userVersion >= SchemaV4.version &&
+        database.userVersion < SchemaV5.version) {
+      database.execute('BEGIN IMMEDIATE');
+      try {
+        for (final statement in v5Statements ?? SchemaV5.statements) {
+          database.execute(statement);
+        }
+        database.execute('COMMIT');
+      } catch (_) {
+        database.execute('ROLLBACK');
+        rethrow;
       }
-      database.execute('COMMIT');
-    } catch (_) {
-      database.execute('ROLLBACK');
-      rethrow;
+    }
+    if (includeV6 && database.userVersion < SchemaV6.version) {
+      database.execute('BEGIN IMMEDIATE');
+      try {
+        for (final statement in v6Statements ?? SchemaV6.statements) {
+          database.execute(statement);
+        }
+        database.execute('COMMIT');
+      } catch (_) {
+        database.execute('ROLLBACK');
+        rethrow;
+      }
     }
   }
 }

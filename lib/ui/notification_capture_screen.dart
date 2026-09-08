@@ -4,6 +4,7 @@ import '../data/notification_capture_bridge.dart';
 import '../domain/notification_capture.dart';
 import 'app_state.dart';
 import 'notification_rule_builder_screen.dart';
+import 'slip_media_inbox_screen.dart';
 import 'theme/app_theme.dart';
 
 class NotificationCaptureScreen extends StatefulWidget {
@@ -289,6 +290,17 @@ class _NotificationCaptureScreenState extends State<NotificationCaptureScreen>
             onPressed: _slipDetectionEnabled ? _addSlipFromDevice : null,
             icon: const Icon(Icons.add_photo_alternate_outlined),
             label: const Text('เลือกสลิปจากเครื่อง'),
+          ),
+          const SizedBox(height: 8),
+          FilledButton.tonalIcon(
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => SlipMediaInboxScreen(state: widget.state),
+              ),
+            ),
+            icon: const Icon(Icons.fact_check_outlined),
+            label: const Text('เปิดรายการสลิปรอตรวจ'),
           ),
           const SizedBox(height: 24),
           Text(

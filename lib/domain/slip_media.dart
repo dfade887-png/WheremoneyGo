@@ -1,3 +1,5 @@
+import 'slip_parser.dart';
+
 /// Metadata discovered from Android MediaStore. No image bytes are retained.
 final class SlipMediaMetadata {
   const SlipMediaMetadata({
@@ -77,6 +79,19 @@ final class SlipMediaEvent {
   final String ingestionSource;
 }
 
+final class SlipParseRecord {
+  const SlipParseRecord({
+    required this.slipMediaEventId,
+    required this.processingStatus,
+    this.result,
+    this.failureCode,
+    this.candidateId,
+  });
+  final String slipMediaEventId, processingStatus;
+  final NormalizedSlipResult? result;
+  final String? failureCode, candidateId;
+}
+
 abstract interface class SlipMediaRepository {
   Future<bool> slipDetectionEnabled();
   Future<void> setSlipDetectionEnabled(bool enabled);
@@ -87,4 +102,15 @@ abstract interface class SlipMediaRepository {
     String ingestionSource,
   });
   Future<List<SlipMediaEvent>> slipMediaEvents();
+  Future<SlipParseRecord?> slipParseRecord(String eventId);
+  Future<SlipParseRecord> saveSlipParseResult(
+    String eventId,
+    NormalizedSlipResult result,
+  );
+  Future<SlipParseRecord> markSlipParseFailed(
+    String eventId,
+    String failureCode,
+  );
+  Future<String?> createCandidateFromSlip(String eventId);
+  Future<void> markSlipNotFinancial(String eventId);
 }

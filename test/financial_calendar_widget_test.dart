@@ -6,7 +6,7 @@ import 'package:ngoen_ku_pai_nai/ui/finance_app.dart';
 import 'package:ngoen_ku_pai_nai/ui/local_finance_store.dart';
 
 void main() {
-  testWidgets('calendar create action opens production scheduled form', (
+  testWidgets('calendar today create action opens confirmed transaction form', (
     tester,
   ) async {
     final store = LocalFinanceStore.memory();
@@ -28,8 +28,31 @@ void main() {
 
     await tester.tap(find.byKey(const Key('calendar-create-scheduled')));
     await tester.pumpAndSettle();
-    expect(find.text('เพิ่มรายการล่วงหน้า'), findsWidgets);
-    expect(find.byKey(const Key('scheduled-title')), findsOneWidget);
+    expect(find.text('บันทึกรายการ'), findsWidgets);
+    expect(find.byKey(const Key('quick-add-save')), findsOneWidget);
+  });
+
+  testWidgets('calendar action label follows selected past and future dates', (
+    tester,
+  ) async {
+    final state = AppState(store: LocalFinanceStore.memory());
+    await tester.pumpWidget(FinanceApp(state: state));
+    await tester.pumpAndSettle();
+    state.go(AppStep.calendar);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('previous-month')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('calendar-day-15')));
+    await tester.pumpAndSettle();
+    expect(find.text('เพิ่มรายการย้อนหลัง'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('next-month')));
+    await tester.tap(find.byKey(const Key('next-month')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('calendar-day-15')));
+    await tester.pumpAndSettle();
+    expect(find.text('เพิ่มรายการตามกำหนด'), findsOneWidget);
   });
 
   testWidgets('calendar fits a small screen with large Thai text scaling', (

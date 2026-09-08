@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 
 import '../domain/notification_capture.dart';
 import '../domain/slip_media.dart';
+import '../domain/slip_parser.dart';
 import 'candidate_notification_service.dart';
 
 final class NotificationCaptureBridge {
@@ -108,6 +109,32 @@ final class NotificationCaptureBridge {
           .toList(growable: false);
     } on MissingPluginException {
       return const [];
+    }
+  }
+
+  /// The platform recognizer works on the local content URI; this method never
+  /// sends image data or OCR text over the network.
+  Future<SlipOcrResult> recognizeSlipText(String contentUri) async {
+    if (!Platform.isAndroid) return const SlipOcrResult.failure('unsupported');
+    try {
+      final value = await _channel.invokeMapMethod<Object?, Object?>(
+        'recognizeSlipText',
+        {'contentUri': contentUri},
+      );
+      if (value == null) return const SlipOcrResult.failure('ocr_empty');
+      if (value['ok'] == false) {
+        return SlipOcrResult.failure(
+          value['failureCode'] as String? ?? 'unknown_native_error',
+        );
+      }
+      return SlipOcrResult.success(
+        text: value['text'] as String? ?? '',
+        lines: (value['lines'] as List? ?? const []).cast<String>(),
+      );
+    } on PlatformException {
+      return const SlipOcrResult.failure('channel_error');
+    } on MissingPluginException {
+      return const SlipOcrResult.failure('unsupported');
     }
   }
 

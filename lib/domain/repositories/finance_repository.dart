@@ -7,6 +7,7 @@ abstract interface class FinanceRepository {
     required String fromAccountId,
     required String toAccountId,
     required int amountSatang,
+    DateTime? occurredAt,
     bool failAfterDebit = false,
   });
   Future<void> softDeleteTransfer(

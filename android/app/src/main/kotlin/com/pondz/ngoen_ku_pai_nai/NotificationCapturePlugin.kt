@@ -13,6 +13,13 @@ import android.os.Build
 import android.provider.Settings
 import android.provider.MediaStore
 import android.provider.OpenableColumns
+import android.net.Uri
+import android.content.Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+import android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+import android.os.ParcelFileDescriptor
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
@@ -90,9 +97,49 @@ object NotificationCapturePlugin {
                                 type = "image/*"
                                 putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
                                 putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("image/jpeg", "image/png", "image/webp"))
+                                addFlags(FLAG_GRANT_READ_URI_PERMISSION or FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
                             },
                             PICK_SLIP_IMAGE,
                         )
+                    }
+                }
+                "recognizeSlipText" -> {
+                    val uriValue = call.argument<String>("contentUri")
+                    if (uriValue.isNullOrBlank() || !uriValue.startsWith("content://")) {
+                        result.success(ocrFailure("unsupported_uri_scheme", uriValue))
+                    } else {
+                        try {
+                            val uri = Uri.parse(uriValue)
+                            // Probe access separately so a durable-permission failure is
+                            // diagnosable without logging a private URI or slip content.
+                            context.contentResolver.openFileDescriptor(uri, "r")?.use { _: ParcelFileDescriptor -> }
+                                ?: run {
+                                    result.success(ocrFailure("uri_unavailable", uriValue))
+                                    return@setMethodCallHandler
+                                }
+                            val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+                            recognizer.process(InputImage.fromFilePath(context, uri))
+                                .addOnSuccessListener { text ->
+                                    // Do not log text or retain it in native storage.
+                                    result.success(mapOf(
+                                        "text" to text.text,
+                                        "lines" to text.textBlocks.flatMap { block -> block.lines.map { it.text } },
+                                    ))
+                                    recognizer.close()
+                                }
+                                .addOnFailureListener { error ->
+                                    result.success(ocrFailure(classifyOcrFailure(error), uriValue))
+                                    recognizer.close()
+                                }
+                        } catch (error: SecurityException) {
+                            result.success(ocrFailure("permission_revoked", uriValue, error.javaClass.simpleName))
+                        } catch (error: java.io.FileNotFoundException) {
+                            result.success(ocrFailure("uri_unavailable", uriValue, error.javaClass.simpleName))
+                        } catch (error: IllegalArgumentException) {
+                            result.success(ocrFailure("image_decode_failed", uriValue, error.javaClass.simpleName))
+                        } catch (error: Exception) {
+                            result.success(ocrFailure("unknown_native_error", uriValue, error.javaClass.simpleName))
+                        }
                     }
                 }
                 "isPackageInstalled" -> {
@@ -151,6 +198,17 @@ object NotificationCapturePlugin {
                 for (index in 0 until clip.itemCount) add(clip.getItemAt(index).uri)
             }
             data.data?.let { uri -> if (!contains(uri)) add(uri) }
+        }
+        val grantedFlags = data.flags and (FLAG_GRANT_READ_URI_PERMISSION or FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        for (uri in uris) {
+            try {
+                // ACTION_OPEN_DOCUMENT grants a persistable read permission when
+                // the provider supports it. MediaStore URIs don't need this.
+                context.contentResolver.takePersistableUriPermission(uri, grantedFlags and FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (_: SecurityException) {
+                // The URI can still be used transiently; recognition returns a
+                // privacy-safe permission code later if it becomes unavailable.
+            }
         }
         val items = uris.mapNotNull { uri -> slipMetadata(context, uri) }
         result.success(items)
@@ -237,6 +295,20 @@ object NotificationCapturePlugin {
             }
         }
         return result
+    }
+
+    private fun ocrFailure(code: String, uriValue: String?, exceptionClass: String? = null): Map<String, Any?> = mapOf(
+        "ok" to false,
+        "failureCode" to code,
+        "uriScheme" to try { Uri.parse(uriValue).scheme } catch (_: Exception) { null },
+        "exceptionClass" to exceptionClass,
+    )
+
+    private fun classifyOcrFailure(error: Exception): String = when (error) {
+        is SecurityException -> "permission_revoked"
+        is java.io.FileNotFoundException -> "uri_unavailable"
+        is IllegalArgumentException -> "image_decode_failed"
+        else -> "ocr_failed"
     }
 
     private fun notifyCandidate(context: Context, candidateId: String, type: String, amountSatang: Int, accountName: String?) {

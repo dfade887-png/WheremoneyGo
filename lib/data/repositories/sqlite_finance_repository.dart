@@ -21,6 +21,7 @@ import '../../domain/salary_projection.dart';
 import '../../domain/transaction_lifecycle.dart';
 import '../../domain/notification_capture.dart';
 import '../../domain/slip_media.dart';
+import '../../domain/slip_parser.dart';
 import '../../domain/notification_rule_parser.dart';
 import '../../domain/candidate_matching.dart';
 import '../../domain/candidate_review.dart';
@@ -93,7 +94,7 @@ final class SqliteFinanceRepository
   ];
 
   void _migrate() {
-    MigrationRunner.migrateToLatest(database);
+    MigrationRunner.migrateToLatest(database, includeV6: true);
     // T20 is additive and keeps the accepted schema/user_version at v5.
     // This also upgrades existing v5 devices without a destructive migration.
     database.execute(
@@ -254,6 +255,196 @@ final class SqliteFinanceRepository
       )
       .map(_slipEventFromRow)
       .toList(growable: false);
+
+  @override
+  Future<SlipParseRecord?> slipParseRecord(String eventId) async {
+    final rows = query(
+      'SELECT * FROM slip_parse_results WHERE profile_id=? AND slip_media_event_id=? AND deleted_at IS NULL',
+      [activeProfileId, eventId],
+    );
+    if (rows.isEmpty) return null;
+    return _parseRecordFromRow(rows.single);
+  }
+
+  SlipParseRecord _parseRecordFromRow(Map<String, Object?> row) {
+    final isFinancial = row['candidate_type'] != null;
+    final direction = switch (row['candidate_type'] as String?) {
+      'expense' => SlipDirection.outgoing,
+      'income' => SlipDirection.incoming,
+      _ => null,
+    };
+    final warnings = (row['warnings_json'] as String?) == null
+        ? const <String>[]
+        : (jsonDecode(row['warnings_json'] as String) as List).cast<String>();
+    return SlipParseRecord(
+      slipMediaEventId: row['slip_media_event_id'] as String,
+      processingStatus: row['processing_status'] as String,
+      failureCode: row['failure_code'] as String?,
+      candidateId: row['candidate_id'] as String?,
+      result: row['parser_id'] == null
+          ? null
+          : NormalizedSlipResult(
+              isFinancialSlip: isFinancial,
+              parserId: row['parser_id'] as String,
+              parserVersion: row['parser_version'] as String? ?? '1',
+              confidence: (row['confidence'] as num?)?.toDouble() ?? 0,
+              direction: direction,
+              amountSatang: row['amount_satang'] as int?,
+              occurredAt: row['occurred_at'] == null
+                  ? null
+                  : DateTime.parse(row['occurred_at'] as String),
+              merchantOrSender: row['merchant_or_sender'] as String?,
+              bankHint: row['bank_hint'] as String?,
+              accountHint: row['account_hint'] as String?,
+              referenceNo: row['reference_no'] as String?,
+              warnings: warnings,
+            ),
+    );
+  }
+
+  @override
+  Future<SlipParseRecord> saveSlipParseResult(
+    String eventId,
+    NormalizedSlipResult result,
+  ) async {
+    final exists = query(
+      'SELECT id FROM slip_media_events WHERE id=? AND profile_id=? AND deleted_at IS NULL',
+      [eventId, activeProfileId],
+    );
+    if (exists.isEmpty) throw StateError('Slip event unavailable');
+    final now = DateTime.now().toUtc().toIso8601String();
+    final status = !result.isFinancialSlip
+        ? 'not_financial'
+        : result.isHighConfidence
+        ? 'parsed'
+        : 'parsed_needs_review';
+    _atomic(() {
+      database.execute(
+        '''INSERT INTO slip_parse_results(id,profile_id,slip_media_event_id,parser_id,parser_version,processing_status,confidence,candidate_type,amount_satang,occurred_at,merchant_or_sender,bank_hint,account_hint,reference_no,warnings_json,created_at,updated_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(profile_id,slip_media_event_id) DO UPDATE SET
+           parser_id=excluded.parser_id,parser_version=excluded.parser_version,processing_status=excluded.processing_status,confidence=excluded.confidence,candidate_type=excluded.candidate_type,amount_satang=excluded.amount_satang,occurred_at=excluded.occurred_at,merchant_or_sender=excluded.merchant_or_sender,bank_hint=excluded.bank_hint,account_hint=excluded.account_hint,reference_no=excluded.reference_no,warnings_json=excluded.warnings_json,failure_code=NULL,updated_at=excluded.updated_at,deleted_at=NULL''',
+        [
+          _uuid.v4(),
+          activeProfileId,
+          eventId,
+          result.parserId,
+          result.parserVersion,
+          status,
+          result.confidence,
+          result.direction == SlipDirection.outgoing
+              ? 'expense'
+              : result.direction == SlipDirection.incoming
+              ? 'income'
+              : null,
+          result.amountSatang,
+          result.occurredAt?.toUtc().toIso8601String(),
+          result.merchantOrSender,
+          result.bankHint,
+          result.accountHint,
+          result.referenceNo,
+          jsonEncode(result.warnings),
+          now,
+          now,
+        ],
+      );
+      database.execute(
+        'UPDATE slip_media_events SET status=?,updated_at=? WHERE id=?',
+        [status, now, eventId],
+      );
+    });
+    return (await slipParseRecord(eventId))!;
+  }
+
+  @override
+  Future<SlipParseRecord> markSlipParseFailed(
+    String eventId,
+    String failureCode,
+  ) async {
+    final now = DateTime.now().toUtc().toIso8601String();
+    _atomic(() {
+      database.execute(
+        '''INSERT INTO slip_parse_results(id,profile_id,slip_media_event_id,processing_status,failure_code,created_at,updated_at)
+           VALUES(?,?,?,'failed',?,?,?) ON CONFLICT(profile_id,slip_media_event_id) DO UPDATE SET processing_status='failed',failure_code=excluded.failure_code,updated_at=excluded.updated_at''',
+        [_uuid.v4(), activeProfileId, eventId, failureCode, now, now],
+      );
+      database.execute(
+        "UPDATE slip_media_events SET status='failed',updated_at=? WHERE id=? AND profile_id=?",
+        [now, eventId, activeProfileId],
+      );
+    });
+    return (await slipParseRecord(eventId))!;
+  }
+
+  @override
+  Future<void> markSlipNotFinancial(String eventId) async {
+    final now = DateTime.now().toUtc().toIso8601String();
+    database.execute(
+      "UPDATE slip_media_events SET status='ignored',updated_at=? WHERE id=? AND profile_id=?",
+      [now, eventId, activeProfileId],
+    );
+  }
+
+  @override
+  Future<String?> createCandidateFromSlip(String eventId) async {
+    final record = await slipParseRecord(eventId);
+    final result = record?.result;
+    if (record == null ||
+        !result!.isHighConfidence ||
+        record.candidateId != null) {
+      return record?.candidateId;
+    }
+    final now = DateTime.now().toUtc().toIso8601String();
+    final candidateId = _uuid.v4();
+    _atomic(() {
+      final existing = query(
+        'SELECT candidate_id FROM candidate_evidence WHERE slip_media_event_id=?',
+        [eventId],
+      );
+      if (existing.isNotEmpty) return;
+      database.execute(
+        '''INSERT INTO transaction_candidates(id,profile_id,account_id,destination_account_id,category_id,candidate_type,amount_satang,occurred_at,merchant_or_sender,reference_no,confidence,review_status,matched_scheduled_event_id,matched_transaction_id,created_at,updated_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,'pending_review',NULL,NULL,?,?)''',
+        [
+          candidateId,
+          activeProfileId,
+          null,
+          null,
+          null,
+          result.direction == SlipDirection.outgoing ? 'expense' : 'income',
+          result.amountSatang,
+          result.occurredAt!.toUtc().toIso8601String(),
+          result.merchantOrSender,
+          result.referenceNo,
+          result.confidence,
+          now,
+          now,
+        ],
+      );
+      database.execute(
+        '''INSERT INTO candidate_evidence(id,candidate_id,evidence_type,slip_media_event_id,parser_id,parser_version,confidence,created_at)
+           VALUES(?,?,'slip',?,?,?,?,?)''',
+        [
+          _uuid.v4(),
+          candidateId,
+          eventId,
+          result.parserId,
+          result.parserVersion,
+          result.confidence,
+          now,
+        ],
+      );
+      database.execute(
+        "UPDATE slip_parse_results SET processing_status='candidate_created',candidate_id=?,updated_at=? WHERE profile_id=? AND slip_media_event_id=?",
+        [candidateId, now, activeProfileId, eventId],
+      );
+      database.execute(
+        "UPDATE slip_media_events SET status='candidate_created',updated_at=? WHERE id=?",
+        [now, eventId],
+      );
+    });
+    return (await slipParseRecord(eventId))?.candidateId;
+  }
 
   void dispose() => database.close();
   void execute(String sql, [List<Object?> parameters = const []]) =>
@@ -1159,6 +1350,10 @@ final class SqliteFinanceRepository
       '''SELECT c.*,a.name account_name,d.name destination_account_name,
                 cat.name category_name,
                 CASE WHEN EXISTS(
+                  SELECT 1 FROM candidate_evidence e
+                  WHERE e.candidate_id=c.id AND e.evidence_type='slip'
+                ) THEN 'สลิป'
+                WHEN EXISTS(
                   SELECT 1 FROM candidate_evidence e
                   JOIN raw_notification_events r ON r.id=e.notification_event_id
                   JOIN notification_sources s ON s.id=r.notification_source_id
@@ -2443,6 +2638,7 @@ final class SqliteFinanceRepository
     required String fromAccountId,
     required String toAccountId,
     required int amountSatang,
+    DateTime? occurredAt,
     bool failAfterDebit = false,
   }) async {
     if (amountSatang <= 0) throw ArgumentError.value(amountSatang);
@@ -2465,6 +2661,7 @@ final class SqliteFinanceRepository
         type: 'transfer_out',
         amount: amountSatang,
         transferGroupId: group,
+        occurredAt: occurredAt,
       );
       if (failAfterDebit) throw StateError('Injected transfer failure');
       _insertTransaction(
@@ -2472,6 +2669,7 @@ final class SqliteFinanceRepository
         type: 'transfer_in',
         amount: amountSatang,
         transferGroupId: group,
+        occurredAt: occurredAt,
       );
       _audit('transfer', group, 'create');
     });
